@@ -1110,13 +1110,29 @@ with tab7:
         st.info("ยังไม่มีข้อมูล — บันทึกรายรับ/รายจ่ายก่อน")
     else:
         df_v["txn_date"] = pd.to_datetime(df_v["txn_date"])
-        total_income_y = df_v[df_v.txn_type=="รายรับ"].amount.sum()
 
-        # ตรวจว่าต้องจด VAT หรือไม่
+        # ===== VAT คิดเฉพาะรายรับที่อยู่ในระบบ VAT เท่านั้น =====
+        # ไม่รวม เงินเดือน ม.40(1) และ ดอกเบี้ย/เงินปันผล ม.40(4) เพราะไม่ใช่การขายสินค้า/บริการ
+        NON_VAT_INCOME = ["40(1) เงินเดือน ค่าจ้าง", "40(4) ดอกเบี้ย/เงินปันผล"]
+        is_income = df_v.txn_type == "รายรับ"
+        is_vatable = ~df_v["income_type"].isin(NON_VAT_INCOME)
+        # รายรับที่เข้าระบบ VAT (ขาย/บริการ)
+        df_v["vat_sale_amt"] = df_v["amount"].where(is_income & is_vatable, 0.0)
+        # รายจ่ายถือเป็นภาษีซื้อทั้งหมด
+        df_v["vat_purchase_amt"] = df_v["amount"].where(df_v.txn_type == "รายจ่าย", 0.0)
+
+        total_income_y = df_v.loc[is_income & is_vatable, "amount"].sum()
+
+        # แจ้งเตือนถ้ามีเงินเดือน/ดอกเบี้ยที่ถูกตัดออกจาก VAT
+        excluded = df_v.loc[is_income & ~is_vatable, "amount"].sum()
+        if excluded > 0:
+            st.info(f"ℹ️ มีรายรับ {excluded:,.0f} บาท (เงินเดือน/ดอกเบี้ย-เงินปันผล) ที่ไม่นำมาคิด VAT เพราะไม่ใช่การขายสินค้า/บริการ")
+
+        # ตรวจว่าต้องจด VAT หรือไม่ (ใช้เฉพาะรายได้ที่เข้าระบบ VAT)
         if total_income_y > 1_800_000:
-            st.error(f"🚨 รายรับรวม {total_income_y:,.0f} บาท เกิน 1.8 ล้าน/ปี — ต้องจดทะเบียน VAT (มาตรา 85/1)")
+            st.error(f"🚨 รายได้จากการขาย/บริการรวม {total_income_y:,.0f} บาท เกิน 1.8 ล้าน/ปี — ต้องจดทะเบียน VAT (มาตรา 85/1)")
         else:
-            st.warning(f"ℹ️ รายรับรวม {total_income_y:,.0f} บาท ยังไม่เกิน 1.8 ล้าน/ปี — ยังไม่บังคับจด VAT (คำนวณเพื่อดูประมาณการได้)")
+            st.warning(f"ℹ️ รายได้จากการขาย/บริการรวม {total_income_y:,.0f} บาท ยังไม่เกิน 1.8 ล้าน/ปี — ยังไม่บังคับจด VAT (คำนวณเพื่อดูประมาณการได้)")
 
         st.divider()
         st.markdown("##### 📅 เลือกเดือนที่ต้องการคำนวณ VAT")
@@ -1125,8 +1141,8 @@ with tab7:
         sel_month = st.selectbox("เดือนภาษี", months)
 
         month_data = df_v[df_v["เดือน"] == sel_month]
-        sale = month_data[month_data.txn_type=="รายรับ"].amount.sum()
-        purchase = month_data[month_data.txn_type=="รายจ่าย"].amount.sum()
+        sale = month_data["vat_sale_amt"].sum()
+        purchase = month_data["vat_purchase_amt"].sum()
 
         vat_sale = round(sale * VAT_RATE, 2)
         vat_purchase = round(purchase * VAT_RATE, 2)
@@ -1134,7 +1150,7 @@ with tab7:
 
         st.markdown(f"##### 📊 สรุป VAT เดือน {sel_month}")
         v1, v2, v3 = st.columns(3)
-        v1.metric("ยอดขาย / ภาษีขาย 7%", f"{sale:,.0f}", f"VAT {vat_sale:,.2f}")
+        v1.metric("ยอดขายที่เข้า VAT / ภาษีขาย 7%", f"{sale:,.0f}", f"VAT {vat_sale:,.2f}")
         v2.metric("ยอดซื้อ / ภาษีซื้อ 7%", f"{purchase:,.0f}", f"VAT {vat_purchase:,.2f}")
         if vat_payable >= 0:
             v3.metric("ภาษีที่ต้องนำส่ง", f"{vat_payable:,.2f}", "ชำระเพิ่ม", delta_color="inverse")
@@ -1143,21 +1159,21 @@ with tab7:
 
         st.divider()
         st.markdown("##### 📋 ตาราง VAT ทุกเดือน")
-        monthly = df_v.pivot_table(index="เดือน", columns="txn_type", values="amount", aggfunc="sum", fill_value=0).reset_index()
-        for col in ["รายรับ","รายจ่าย"]:
-            if col not in monthly.columns:
-                monthly[col] = 0
-        monthly["ภาษีขาย 7%"] = (monthly["รายรับ"] * VAT_RATE).round(2)
+        monthly = df_v.groupby("เดือน").agg(
+            ยอดขาย=("vat_sale_amt", "sum"),
+            รายจ่าย=("vat_purchase_amt", "sum"),
+        ).reset_index()
+        monthly["ภาษีขาย 7%"] = (monthly["ยอดขาย"] * VAT_RATE).round(2)
         monthly["ภาษีซื้อ 7%"] = (monthly["รายจ่าย"] * VAT_RATE).round(2)
         monthly["VAT ต้องนำส่ง"] = (monthly["ภาษีขาย 7%"] - monthly["ภาษีซื้อ 7%"]).round(2)
-        st.dataframe(monthly[["เดือน","รายรับ","ภาษีขาย 7%","รายจ่าย","ภาษีซื้อ 7%","VAT ต้องนำส่ง"]],
+        st.dataframe(monthly[["เดือน","ยอดขาย","ภาษีขาย 7%","รายจ่าย","ภาษีซื้อ 7%","VAT ต้องนำส่ง"]],
                      use_container_width=True, hide_index=True)
 
         if vat_payable >= 0:
             st.success(f"### 💸 VAT ที่ต้องนำส่งเดือน {sel_month}: {vat_payable:,.2f} บาท")
         else:
             st.info(f"### เดือน {sel_month} ภาษีซื้อมากกว่าภาษีขาย — ไม่ต้องชำระ ยกเครดิต {abs(vat_payable):,.2f} บาทไปเดือนหน้า")
-        st.caption("⚠️ ต้องยื่น ภ.พ.30 ทุกเดือนแม้ยอดเป็นศูนย์ | ประมาณการเบื้องต้น สมมติทุกรายการมี VAT 7% ควรตรวจสอบรายการยกเว้น VAT กับกรมสรรพากร")
+        st.caption("⚠️ ต้องยื่น ภ.พ.30 ทุกเดือนแม้ยอดเป็นศูนย์ | VAT คิดเฉพาะการขายสินค้า/บริการ ไม่รวมเงินเดือนและดอกเบี้ย-เงินปันผล | ควรตรวจสอบรายการยกเว้น VAT กับกรมสรรพากร")
 
 # =====================================================================
 #  TAB 8 — ภาษีหัก ณ ที่จ่าย (Withholding Tax)
