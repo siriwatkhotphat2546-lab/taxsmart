@@ -138,8 +138,27 @@ hr{border-color:var(--line) !important;}
   background:var(--slate) !important;
   color:var(--paper) !important;
 }
+/* กล่อง st.json / st.code / โค้ด — พื้นเข้ม ตัวสว่าง อ่านชัด */
+[data-testid="stJson"], .stJson, pre, code,
+[data-testid="stJson"] *{
+  background:var(--slate) !important;
+  color:var(--paper) !important;
+}
+[data-testid="stJson"]{
+  border:1px solid var(--line) !important;
+  border-radius:12px !important;
+  padding:12px !important;
+}
 /* ตาราง dataframe ข้อความ */
 [data-testid="stDataFrame"] *{color:var(--paper);}
+/* แก้ JSON / code block ที่ตัวหนังสือจาง */
+[data-testid="stJson"], [data-testid="stJson"] *,
+.stJson, pre, code{
+  color:var(--paper) !important;
+}
+[data-testid="stJson"]{
+  background:var(--slate) !important; border-radius:10px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -402,7 +421,9 @@ def make_pdf_report(df, user, tax_summary=None):
     story.append(Paragraph("รายการทั้งหมด (แสดงสูงสุด 30 รายการล่าสุด)", head_style))
     rows = [["วันที่", "ประเภท", "หมวดหมู่", "จำนวนเงิน"]]
     for _, r in df.head(30).iterrows():
-        rows.append([str(r["txn_date"]), r["txn_type"], r["category"], f"{r['amount']:,.2f}"])
+        d = pd.to_datetime(r["txn_date"], errors="coerce")
+        d_str = d.strftime("%Y-%m-%d") if pd.notna(d) else str(r["txn_date"])
+        rows.append([d_str, r["txn_type"], r["category"], f"{r['amount']:,.2f}"])
     t2 = Table(rows, colWidths=[35*mm, 30*mm, 60*mm, 35*mm])
     t2.setStyle(TableStyle([
         ("FONTNAME", (0,0), (-1,-1), font_name),
@@ -589,6 +610,8 @@ with tab1:
             "txn_date":"วันที่","txn_type":"ประเภท","income_type":"เงินได้ ม.40",
             "category":"หมวดหมู่","description":"รายละเอียด","amount":"จำนวนเงิน"
         }).copy()
+        # บังคับคอลัมน์วันที่ให้เป็นข้อความ YYYY-MM-DD สะอาด (กันแสดงผลเพี้ยน/มีเวลา 00:00:00)
+        editor_df["วันที่"] = pd.to_datetime(editor_df["วันที่"], errors="coerce").dt.strftime("%Y-%m-%d")
         # ป้องกัน KeyError: เติมคอลัมน์ที่อาจหายไปให้ครบก่อนเสมอ
         for col in ["เงินได้ ม.40","รายละเอียด"]:
             if col not in editor_df.columns:
@@ -602,7 +625,11 @@ with tab1:
             editor_df[["id"] + view_cols],
             use_container_width=True, hide_index=True,
             disabled=["id","วันที่","ประเภท","เงินได้ ม.40","หมวดหมู่","รายละเอียด","จำนวนเงิน"],
-            column_config={"id": None},
+            column_config={
+                "id": None,
+                "วันที่": st.column_config.TextColumn("วันที่"),
+                "จำนวนเงิน": st.column_config.NumberColumn("จำนวนเงิน", format="%.2f"),
+            },
             key="txn_editor"
         )
 
@@ -768,13 +795,20 @@ with tab2:
         ded = ded_g1 + ded_g2 + ded_g3 + ded_g4
 
         with st.expander("🧾 ดูสรุปค่าลดหย่อนแต่ละกลุ่ม"):
-            st.write({
-                "กลุ่ม 1 ส่วนตัว/ครอบครัว": f"{ded_g1:,.0f}",
-                "กลุ่ม 2 ประกัน/ออม/ลงทุน": f"{ded_g2:,.0f}",
-                "กลุ่ม 3 อสังหาฯ/รัฐ": f"{ded_g3:,.0f}",
-                "กลุ่ม 4 บริจาค": f"{ded_g4:,.0f}",
-                "รวมทั้งหมด": f"{ded:,.0f}",
+            summary_ded = pd.DataFrame({
+                "กลุ่มค่าลดหย่อน": [
+                    "กลุ่ม 1 — ส่วนตัว/ครอบครัว",
+                    "กลุ่ม 2 — ประกัน/ออม/ลงทุน",
+                    "กลุ่ม 3 — อสังหาฯ/มาตรการรัฐ",
+                    "กลุ่ม 4 — เงินบริจาค",
+                    "รวมทั้งหมด",
+                ],
+                "จำนวนเงิน (บาท)": [
+                    f"{ded_g1:,.0f}", f"{ded_g2:,.0f}", f"{ded_g3:,.0f}",
+                    f"{ded_g4:,.0f}", f"{ded:,.0f}",
+                ],
             })
+            st.dataframe(summary_ded, use_container_width=True, hide_index=True)
 
         net = max(0.0, total_after_expense - ded)
         tax, detail = calc_progressive_tax(net)
