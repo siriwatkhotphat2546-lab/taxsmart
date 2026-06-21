@@ -1,0 +1,1174 @@
+import streamlit as st
+import sqlite3
+import pandas as pd
+from datetime import date, datetime
+import io
+
+st.set_page_config(page_title="TaxSmart", page_icon="💰", layout="wide")
+
+# =====================================================================
+#  ฐานข้อมูลกลาง (Single Source of Truth)
+# =====================================================================
+DB = "taxsmart.db"
+
+def get_conn():
+    conn = sqlite3.connect(DB)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            txn_date TEXT NOT NULL,
+            txn_type TEXT NOT NULL,          -- รายรับ / รายจ่าย
+            income_type TEXT,                -- ประเภทเงินได้ ม.40(x) (เฉพาะรายรับ)
+            category TEXT NOT NULL,
+            description TEXT,
+            amount REAL NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # ----- Auto-migration: เพิ่มคอลัมน์ที่ขาดให้ตารางเก่า โดยไม่ลบข้อมูลเดิม -----
+    existing = [r[1] for r in conn.execute("PRAGMA table_info(transactions)").fetchall()]
+    migrations = {
+        "income_type": "ALTER TABLE transactions ADD COLUMN income_type TEXT",
+        "description": "ALTER TABLE transactions ADD COLUMN description TEXT",
+        "created_at": "ALTER TABLE transactions ADD COLUMN created_at TEXT",
+        "user_id": "ALTER TABLE transactions ADD COLUMN user_id TEXT",
+    }
+    for col, sql in migrations.items():
+        if col not in existing:
+            conn.execute(sql)
+    # ตารางเก็บข้อความติดต่อ/แจ้งปัญหา
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            fb_type TEXT,
+            message TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # ตารางเคลื่อนไหวสินค้า (ซื้อเข้า/ขายออก) สำหรับคำนวณต้นทุน
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS inventory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            move_date TEXT NOT NULL,
+            product TEXT NOT NULL,
+            move_type TEXT NOT NULL,
+            qty REAL NOT NULL,
+            unit_cost REAL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    return conn
+
+# =====================================================================
+#  คลังความรู้กฎหมายภาษี — ประเภทเงินได้ ม.40 และวิธีหักค่าใช้จ่าย
+#  อ้างอิงประมวลรัษฎากร หมวด 3 (ปีภาษี 2568-2569)
+# =====================================================================
+INCOME_TYPES = {
+    "40(1) เงินเดือน ค่าจ้าง": {
+        "section": "มาตรา 40(1)",
+        "expense_rule": "หักเหมา 50% สูงสุด 100,000 บาท (รวมกับ 40(2))",
+        "expense_rate": 0.50,
+        "expense_cap": 100_000,
+        "note": "เงินได้จากการจ้างแรงงาน เช่น เงินเดือน โบนัส เบี้ยเลี้ยง",
+    },
+    "40(2) รับจ้างทำงาน/ฟรีแลนซ์": {
+        "section": "มาตรา 40(2)",
+        "expense_rule": "หักเหมา 50% สูงสุด 100,000 บาท (รวมกับ 40(1))",
+        "expense_rate": 0.50,
+        "expense_cap": 100_000,
+        "note": "ค่านายหน้า ค่าจ้างทั่วไปที่ไม่ใช่ลูกจ้างประจำ",
+    },
+    "40(3) ค่าลิขสิทธิ์/goodwill": {
+        "section": "มาตรา 40(3)",
+        "expense_rule": "หักตามจริง หรือเหมา 50% สูงสุด 100,000 (เฉพาะบางกรณี)",
+        "expense_rate": 0.50,
+        "expense_cap": 100_000,
+        "note": "ค่าแห่งกู๊ดวิลล์ ลิขสิทธิ์ สิทธิอย่างอื่น",
+    },
+    "40(4) ดอกเบี้ย/เงินปันผล": {
+        "section": "มาตรา 40(4)",
+        "expense_rule": "หักค่าใช้จ่ายไม่ได้",
+        "expense_rate": 0.0,
+        "expense_cap": 0,
+        "note": "ดอกเบี้ยเงินฝาก เงินปันผล (มักถูกหัก ณ ที่จ่ายแล้ว)",
+    },
+    "40(5) ค่าเช่าทรัพย์สิน": {
+        "section": "มาตรา 40(5)",
+        "expense_rule": "หักเหมา 10-30% ตามประเภททรัพย์ หรือหักตามจริง",
+        "expense_rate": 0.30,
+        "expense_cap": None,
+        "note": "ค่าเช่าบ้าน ที่ดิน ยานพาหนะ (เหมาตามชนิดทรัพย์สิน)",
+    },
+    "40(6) วิชาชีพอิสระ": {
+        "section": "มาตรา 40(6)",
+        "expense_rule": "หักเหมา 30-60% ตามวิชาชีพ หรือหักตามจริง",
+        "expense_rate": 0.30,
+        "expense_cap": None,
+        "note": "แพทย์ ทนาย วิศวกร สถาปนิก บัญชี ประณีตศิลป์",
+    },
+    "40(7) รับเหมา (ค่าแรง+ของ)": {
+        "section": "มาตรา 40(7)",
+        "expense_rule": "หักเหมา 60% หรือหักตามจริง",
+        "expense_rate": 0.60,
+        "expense_cap": None,
+        "note": "รับเหมาที่ผู้รับเหมาจัดหาสัมภาระสำคัญนอกจากเครื่องมือ",
+    },
+    "40(8) ธุรกิจ/ค้าขาย": {
+        "section": "มาตรา 40(8)",
+        "expense_rule": "หักเหมา 60% หรือหักตามจริง (ม.65 ทวิ)",
+        "expense_rate": 0.60,
+        "expense_cap": None,
+        "note": "ค้าขาย ขายของออนไลน์ ร้านอาหาร ขนส่ง ฯลฯ",
+    },
+}
+
+# =====================================================================
+#  ฟังก์ชันคำนวณภาษีขั้นบันได (มาตรา 48) ปีภาษี 2568-2569
+# =====================================================================
+def calc_progressive_tax(net_income):
+    brackets = [
+        (150_000, 0.00), (300_000, 0.05), (500_000, 0.10), (750_000, 0.15),
+        (1_000_000, 0.20), (2_000_000, 0.25), (5_000_000, 0.30), (float("inf"), 0.35),
+    ]
+    tax, prev, detail = 0.0, 0, []
+    for limit, rate in brackets:
+        if net_income > prev:
+            taxable = min(net_income, limit) - prev
+            t = taxable * rate
+            tax += t
+            if taxable > 0:
+                detail.append({
+                    "ช่วงเงินได้สุทธิ": f"{prev:,.0f} - {min(net_income, limit):,.0f}",
+                    "อัตรา": f"{rate*100:.0f}%",
+                    "ภาษี (บาท)": round(t, 2),
+                })
+        prev = limit
+        if net_income <= limit:
+            break
+    return round(tax, 2), detail
+
+# =====================================================================
+#  ฟังก์ชัน Export รายงานเป็น Excel
+# =====================================================================
+def make_excel_report(df, user):
+    """สร้างไฟล์ Excel มี 2 sheet: รายการทั้งหมด + สรุปรายเดือน"""
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        # Sheet 1: รายการทั้งหมด
+        export_df = df.rename(columns={
+            "txn_date":"วันที่","txn_type":"ประเภท","income_type":"เงินได้ ม.40",
+            "category":"หมวดหมู่","description":"รายละเอียด","amount":"จำนวนเงิน"
+        })
+        cols = ["วันที่","ประเภท","เงินได้ ม.40","หมวดหมู่","รายละเอียด","จำนวนเงิน"]
+        cols = [c for c in cols if c in export_df.columns]
+        export_df[cols].to_excel(writer, sheet_name="รายการทั้งหมด", index=False)
+
+        # Sheet 2: สรุปรายเดือน
+        tmp = df.copy()
+        tmp["txn_date"] = pd.to_datetime(tmp["txn_date"])
+        tmp["เดือน"] = tmp["txn_date"].dt.to_period("M").astype(str)
+        summary = tmp.pivot_table(index="เดือน", columns="txn_type",
+                                   values="amount", aggfunc="sum", fill_value=0).reset_index()
+        for c in ["รายรับ","รายจ่าย"]:
+            if c not in summary.columns:
+                summary[c] = 0
+        summary["กำไรสุทธิ"] = summary["รายรับ"] - summary["รายจ่าย"]
+        summary.to_excel(writer, sheet_name="สรุปรายเดือน", index=False)
+
+        # จัดความกว้างคอลัมน์ให้อ่านง่าย
+        for sheet in writer.sheets.values():
+            for col in sheet.columns:
+                width = max((len(str(c.value)) for c in col if c.value), default=10)
+                sheet.column_dimensions[col[0].column_letter].width = min(width + 4, 40)
+
+    output.seek(0)
+    return output.getvalue()
+
+# =====================================================================
+#  ฟังก์ชัน Export รายงานสรุปภาษีเป็น PDF (รองรับภาษาไทย)
+# =====================================================================
+def make_pdf_report(df, user, tax_summary=None):
+    """สร้างรายงาน PDF สรุปบัญชีและภาษี — โหลดฟอนต์ไทยจากระบบ Windows อัตโนมัติ"""
+    import os
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+    # หาฟอนต์ไทยจากระบบ (Windows / macOS / Linux)
+    thai_font_paths = [
+        r"C:\Windows\Fonts\tahoma.ttf",
+        r"C:\Windows\Fonts\leelawui.ttf",
+        r"C:\Windows\Fonts\leelawad.ttf",
+        r"C:\Windows\Fonts\angsau.ttf",
+        r"C:\Windows\Fonts\cordia.ttf",
+        "/Library/Fonts/Thonburi.ttf",
+        "/usr/share/fonts/truetype/tlwg/Sarabun.ttf",
+        "/usr/share/fonts/truetype/thai/Sarabun.ttf",
+    ]
+    font_name = "Helvetica"  # fallback
+    for fp in thai_font_paths:
+        if os.path.exists(fp):
+            try:
+                pdfmetrics.registerFont(TTFont("ThaiFont", fp))
+                font_name = "ThaiFont"
+                break
+            except Exception:
+                continue
+
+    output = io.BytesIO()
+    doc = SimpleDocTemplate(output, pagesize=A4,
+                            topMargin=20*mm, bottomMargin=20*mm,
+                            leftMargin=18*mm, rightMargin=18*mm)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("ThaiTitle", parent=styles["Title"], fontName=font_name, fontSize=18)
+    head_style = ParagraphStyle("ThaiHead", parent=styles["Heading2"], fontName=font_name, fontSize=13)
+    normal_style = ParagraphStyle("ThaiNormal", parent=styles["Normal"], fontName=font_name, fontSize=10)
+
+    story = []
+    story.append(Paragraph("รายงานสรุปบัญชีและภาษี — TaxSmart", title_style))
+    story.append(Paragraph(f"ผู้ใช้: {user} | วันที่ออกรายงาน: {date.today().isoformat()}", normal_style))
+    story.append(Spacer(1, 10))
+
+    # สรุปยอด
+    ti = df[df.txn_type=="รายรับ"].amount.sum()
+    te = df[df.txn_type=="รายจ่าย"].amount.sum()
+    story.append(Paragraph("สรุปภาพรวม", head_style))
+    summary_data = [
+        ["รายการ", "จำนวนเงิน (บาท)"],
+        ["รายรับรวม", f"{ti:,.2f}"],
+        ["รายจ่ายรวม", f"{te:,.2f}"],
+        ["กำไรสุทธิ", f"{ti-te:,.2f}"],
+    ]
+    if tax_summary:
+        summary_data.append(["ภาษีโดยประมาณ", f"{tax_summary:,.2f}"])
+    t = Table(summary_data, colWidths=[90*mm, 70*mm])
+    t.setStyle(TableStyle([
+        ("FONTNAME", (0,0), (-1,-1), font_name),
+        ("FONTSIZE", (0,0), (-1,-1), 10),
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1D9E75")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+        ("ALIGN", (1,0), (1,-1), "RIGHT"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#F1EFE8")]),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 14))
+
+    # รายการล่าสุด (สูงสุด 30 รายการ)
+    story.append(Paragraph("รายการทั้งหมด (แสดงสูงสุด 30 รายการล่าสุด)", head_style))
+    rows = [["วันที่", "ประเภท", "หมวดหมู่", "จำนวนเงิน"]]
+    for _, r in df.head(30).iterrows():
+        rows.append([str(r["txn_date"]), r["txn_type"], r["category"], f"{r['amount']:,.2f}"])
+    t2 = Table(rows, colWidths=[35*mm, 30*mm, 60*mm, 35*mm])
+    t2.setStyle(TableStyle([
+        ("FONTNAME", (0,0), (-1,-1), font_name),
+        ("FONTSIZE", (0,0), (-1,-1), 9),
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#378ADD")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+        ("ALIGN", (3,0), (3,-1), "RIGHT"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#F1EFE8")]),
+    ]))
+    story.append(t2)
+    story.append(Spacer(1, 14))
+    story.append(Paragraph("⚠️ รายงานนี้เป็นการประมาณการเบื้องต้นตามอัตราปีภาษี 2568-2569 "
+                           "ควรตรวจสอบกับกรมสรรพากรหรือผู้เชี่ยวชาญก่อนยื่นจริง", normal_style))
+
+    doc.build(story)
+    output.seek(0)
+    return output.getvalue()
+
+# =====================================================================
+#  ฟังก์ชันคำนวณต้นทุนสินค้า — FIFO และ Weighted Average (TAS 2)
+# =====================================================================
+def calc_fifo(movements):
+    """คำนวณต้นทุนแบบ FIFO. movements = list ของ dict {move_type, qty, unit_cost}
+    คืนค่า: ต้นทุนขายรวม (COGS), มูลค่าคงเหลือ, จำนวนคงเหลือ"""
+    lots = []  # คิว [qty, unit_cost]
+    cogs = 0.0
+    for m in movements:
+        if m["move_type"] == "ซื้อเข้า":
+            lots.append([m["qty"], m["unit_cost"]])
+        else:  # ขายออก
+            remain = m["qty"]
+            while remain > 0 and lots:
+                lot = lots[0]
+                take = min(remain, lot[0])
+                cogs += take * lot[1]
+                lot[0] -= take
+                remain -= take
+                if lot[0] <= 0:
+                    lots.pop(0)
+    ending_qty = sum(l[0] for l in lots)
+    ending_value = sum(l[0]*l[1] for l in lots)
+    return round(cogs, 2), round(ending_value, 2), round(ending_qty, 2)
+
+def calc_weighted_avg(movements):
+    """คำนวณต้นทุนแบบถัวเฉลี่ยถ่วงน้ำหนัก (Weighted Average)"""
+    total_qty = 0.0
+    total_value = 0.0
+    cogs = 0.0
+    for m in movements:
+        if m["move_type"] == "ซื้อเข้า":
+            total_qty += m["qty"]
+            total_value += m["qty"] * m["unit_cost"]
+        else:  # ขายออก
+            avg_cost = (total_value / total_qty) if total_qty > 0 else 0.0
+            sold = min(m["qty"], total_qty)
+            cogs += sold * avg_cost
+            total_value -= sold * avg_cost
+            total_qty -= sold
+    return round(cogs, 2), round(total_value, 2), round(total_qty, 2)
+
+# =====================================================================
+#  HEADER
+# =====================================================================
+# ===== ระบบแยกผู้ใช้ ระดับ 1 (พิมพ์ชื่อเข้าใช้) =====
+if "user_id" not in st.session_state:
+    st.session_state.user_id = None
+
+if not st.session_state.user_id:
+    st.title("💰 TaxSmart")
+    st.markdown("#### เข้าใช้งาน — กรุณาพิมพ์ชื่อผู้ใช้ของคุณ")
+    st.caption("แต่ละชื่อจะเห็นเฉพาะข้อมูลของตัวเอง (ระบบทดสอบ ยังไม่มีรหัสผ่าน)")
+    with st.form("login_form"):
+        uid = st.text_input("ชื่อผู้ใช้ (เช่น somchai หรือ user01)", max_chars=30)
+        if st.form_submit_button("เข้าใช้งาน", use_container_width=True):
+            cleaned = uid.strip()
+            if cleaned:
+                st.session_state.user_id = cleaned
+                st.rerun()
+            else:
+                st.error("กรุณาพิมพ์ชื่อผู้ใช้ก่อนเข้าใช้งาน")
+    st.stop()
+
+USER = st.session_state.user_id
+
+col_t, col_u = st.columns([4, 1])
+with col_t:
+    st.title("💰 TaxSmart")
+    st.caption("แพลตฟอร์มบัญชี-ภาษี-วางแผนการเงิน สำหรับบุคคลธรรมดา | อ้างอิงประมวลรัษฎากร ปีภาษี 2568-2569")
+with col_u:
+    st.markdown(f"**ผู้ใช้:** {USER}")
+    if st.button("ออกจากระบบ"):
+        st.session_state.user_id = None
+        st.rerun()
+
+# ===== Sidebar: ติดต่อผู้สร้าง / แจ้งปัญหา =====
+with st.sidebar:
+    st.markdown("### 📨 ติดต่อ / แจ้งปัญหา")
+    st.caption("พบข้อผิดพลาดหรือมีข้อเสนอแนะ? แจ้งได้ที่นี่")
+    with st.form("feedback_form", clear_on_submit=True):
+        fb_type = st.selectbox("ประเภท", ["แจ้งบั๊ก/ข้อผิดพลาด", "เสนอฟีเจอร์ใหม่", "สอบถามการใช้งาน", "อื่นๆ"])
+        fb_msg = st.text_area("รายละเอียด", height=100, placeholder="พิมพ์ข้อความของคุณ...")
+        if st.form_submit_button("ส่งข้อความ", use_container_width=True):
+            if fb_msg.strip():
+                conn = get_conn()
+                conn.execute(
+                    "INSERT INTO feedback (user_id, fb_type, message) VALUES (?,?,?)",
+                    (USER, fb_type, fb_msg.strip())
+                )
+                conn.commit(); conn.close()
+                st.success("✅ ส่งข้อความเรียบร้อย ขอบคุณสำหรับข้อเสนอแนะ")
+            else:
+                st.error("กรุณาพิมพ์รายละเอียดก่อนส่ง")
+    st.divider()
+    st.caption("📧 อีเมลผู้ดูแล: your-email@example.com")
+    st.caption("(เปลี่ยนเป็นอีเมลจริงของคุณในโค้ด)")
+
+tab1, tab2, tab6, tab7, tab8, tab9, tab3, tab4, tab5 = st.tabs([
+    "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "📅 ภาษีครึ่งปี (ภ.ง.ด.94)",
+    "🧾 VAT (ภ.พ.30)", "✂️ หัก ณ ที่จ่าย", "📦 ต้นทุนสินค้า",
+    "📊 วิเคราะห์รายเดือน-ปี", "🔮 วางแผนการเงิน", "📖 คลังกฎหมายภาษี"
+])
+
+# =====================================================================
+#  TAB 1 — บันทึกบัญชี (มีติ๊กเลือกประเภทเงินได้)
+# =====================================================================
+with tab1:
+    with st.form("txn_form", clear_on_submit=True):
+        st.subheader("📝 บันทึกรายการใหม่")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            txn_date = st.date_input("วันที่", value=date.today())
+            txn_type = st.selectbox("ประเภท", ["รายรับ", "รายจ่าย"])
+        with c2:
+            # ติ๊กเลือกประเภทเงินได้ (เฉพาะรายรับ)
+            income_type = st.selectbox(
+                "ประเภทเงินได้ (ตามมาตรา 40) — เลือกถ้าเป็นรายรับ",
+                ["— ไม่ระบุ —"] + list(INCOME_TYPES.keys()),
+                help="ระบบจะใช้ข้อมูลนี้เติมช่องภาษีให้อัตโนมัติในแท็บคำนวณภาษี"
+            )
+            amount = st.number_input("จำนวนเงิน (บาท)", min_value=0.0, step=100.0, format="%.2f")
+        with c3:
+            category = st.selectbox("หมวดหมู่บัญชี", [
+                "ขายสินค้า", "ค่าบริการ", "รายได้อื่นๆ",
+                "ซื้อสินค้า/วัตถุดิบ", "ค่าขนส่ง", "ค่าเช่า",
+                "ค่าน้ำค่าไฟ", "ค่าโฆษณา", "เงินเดือนพนักงาน", "ค่าใช้จ่ายอื่นๆ"
+            ])
+            description = st.text_input("รายละเอียด (ไม่บังคับ)")
+
+        if st.form_submit_button("💾 บันทึกรายการ", use_container_width=True):
+            if amount <= 0:
+                st.error("กรุณากรอกจำนวนเงินมากกว่า 0")
+            else:
+                it = None if income_type == "— ไม่ระบุ —" else income_type
+                conn = get_conn()
+                conn.execute(
+                    "INSERT INTO transactions (txn_date, txn_type, income_type, category, description, amount, user_id) VALUES (?,?,?,?,?,?,?)",
+                    (txn_date.isoformat(), txn_type, it, category, description, amount, USER)
+                )
+                conn.commit(); conn.close()
+                st.success(f"✅ บันทึก {txn_type} {amount:,.2f} บาท เรียบร้อย!")
+
+    conn = get_conn()
+    df = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=? ORDER BY txn_date DESC, id DESC", conn, params=(USER,))
+    conn.close()
+
+    st.divider()
+    if df.empty:
+        st.info("ยังไม่มีรายการ — ลองบันทึกรายการแรกด้านบน")
+    else:
+        ti = df[df.txn_type=="รายรับ"].amount.sum()
+        te = df[df.txn_type=="รายจ่าย"].amount.sum()
+        a,b,c = st.columns(3)
+        a.metric("💚 รายรับรวม", f"{ti:,.2f} บาท")
+        b.metric("💸 รายจ่ายรวม", f"{te:,.2f} บาท")
+        c.metric("📊 กำไรสุทธิ", f"{ti-te:,.2f} บาท")
+
+        st.markdown("##### 📋 รายการทั้งหมด (เลือกเพื่อลบรายการที่คีย์ผิด)")
+        st.caption("ติ๊กช่อง \'ลบ\' ในรายการที่ต้องการ แล้วกดปุ่มลบด้านล่าง ระบบจะให้ยืนยันก่อนลบจริง")
+
+        editor_df = df.rename(columns={
+            "txn_date":"วันที่","txn_type":"ประเภท","income_type":"เงินได้ ม.40",
+            "category":"หมวดหมู่","description":"รายละเอียด","amount":"จำนวนเงิน"
+        }).copy()
+        # ป้องกัน KeyError: เติมคอลัมน์ที่อาจหายไปให้ครบก่อนเสมอ
+        for col in ["เงินได้ ม.40","รายละเอียด"]:
+            if col not in editor_df.columns:
+                editor_df[col] = ""
+        editor_df["เงินได้ ม.40"] = editor_df["เงินได้ ม.40"].fillna("")
+        editor_df["รายละเอียด"] = editor_df["รายละเอียด"].fillna("")
+        editor_df["ลบ"] = False
+        view_cols = ["ลบ","วันที่","ประเภท","เงินได้ ม.40","หมวดหมู่","รายละเอียด","จำนวนเงิน"]
+
+        edited = st.data_editor(
+            editor_df[["id"] + view_cols],
+            use_container_width=True, hide_index=True,
+            disabled=["id","วันที่","ประเภท","เงินได้ ม.40","หมวดหมู่","รายละเอียด","จำนวนเงิน"],
+            column_config={"id": None},
+            key="txn_editor"
+        )
+
+        to_delete = edited[edited["ลบ"] == True]
+        n_sel = len(to_delete)
+
+        col_del, col_info = st.columns([1, 3])
+        with col_del:
+            delete_clicked = st.button(
+                f"🗑️ ลบรายการที่เลือก ({n_sel})",
+                disabled=(n_sel == 0),
+                use_container_width=True
+            )
+        with col_info:
+            if n_sel > 0:
+                sum_sel = to_delete["จำนวนเงิน"].sum()
+                st.warning(f"เลือกไว้ {n_sel} รายการ รวม {sum_sel:,.2f} บาท — การลบไม่สามารถย้อนกลับได้")
+
+        if delete_clicked and n_sel > 0:
+            st.session_state["confirm_delete_ids"] = to_delete["id"].tolist()
+
+        if st.session_state.get("confirm_delete_ids"):
+            ids = st.session_state["confirm_delete_ids"]
+            st.error(f"⚠️ ยืนยันการลบ {len(ids)} รายการ? การกระทำนี้ลบข้อมูลออกถาวร")
+            cc1, cc2, _ = st.columns([1, 1, 3])
+            with cc1:
+                if st.button("✅ ยืนยันลบ", use_container_width=True):
+                    conn = get_conn()
+                    conn.executemany("DELETE FROM transactions WHERE id = ? AND user_id = ?", [(i, USER) for i in ids])
+                    conn.commit(); conn.close()
+                    st.session_state.pop("confirm_delete_ids", None)
+                    st.success(f"ลบ {len(ids)} รายการเรียบร้อย")
+                    st.rerun()
+            with cc2:
+                if st.button("❌ ยกเลิก", use_container_width=True):
+                    st.session_state.pop("confirm_delete_ids", None)
+                    st.rerun()
+
+# =====================================================================
+#  TAB 2 — คำนวณภาษี (เติมช่องอัตโนมัติจากประเภทเงินได้ที่ติ๊กไว้)
+# =====================================================================
+with tab2:
+    st.subheader("🧮 คำนวณภาษีเงินได้บุคคลธรรมดา")
+
+    conn = get_conn()
+    inc = pd.read_sql_query("SELECT * FROM transactions WHERE txn_type='รายรับ' AND user_id=?", conn, params=(USER,))
+    conn.close()
+
+    if inc.empty:
+        st.info("ยังไม่มีรายรับในระบบ — ไปบันทึกที่แท็บ  'บันทึกบัญชี' ก่อน")
+    else:
+        # จัดกลุ่มรายรับตามประเภทเงินได้ที่ติ๊กไว้
+        st.markdown("##### 📥 รายรับแยกตามประเภทเงินได้ (ดึงจากที่คุณติ๊กไว้)")
+        grouped = inc.groupby("income_type", dropna=False)["amount"].sum().reset_index()
+
+        total_after_expense = 0.0
+        used_sections = []
+        for _, row in grouped.iterrows():
+            it = row["income_type"]
+            amt = row["amount"]
+            if it is None or it not in INCOME_TYPES:
+                st.warning(f"⚠️ รายรับ {amt:,.0f} บาท ยังไม่ได้ระบุประเภทเงินได้ — หักค่าใช้จ่ายไม่ได้จนกว่าจะระบุ")
+                total_after_expense += amt
+                continue
+            info = INCOME_TYPES[it]
+            rate = info["expense_rate"]; cap = info["expense_cap"]
+            expense = amt * rate
+            if cap is not None:
+                expense = min(expense, cap)
+            after = amt - expense
+            total_after_expense += after
+            used_sections.append(info["section"])
+            st.markdown(
+                f"**{it}** — รายรับ {amt:,.0f} | หักค่าใช้จ่าย "
+                f"({info['expense_rule']}) = {expense:,.0f} | เหลือ {after:,.0f} บาท"
+            )
+
+        st.divider()
+        st.markdown("##### 📋 ค่าลดหย่อน ปีภาษี 2568 — ครบทุกรายการ (อ้างอิง ภ.ง.ด.90/91)")
+        st.caption("เปิดเฉพาะกลุ่มที่คุณใช้สิทธิ์ — ส่วนที่ไม่ได้กรอกระบบจะถือเป็น 0")
+
+        # ===== กลุ่ม 1: ส่วนตัวและครอบครัว =====
+        with st.expander("👤 กลุ่ม 1 — ส่วนตัวและครอบครัว", expanded=True):
+            g1a, g1b = st.columns(2)
+            with g1a:
+                st.text("ลดหย่อนส่วนตัว: 60,000 (อัตโนมัติ ม.47(1)(ก))")
+                spouse = st.checkbox("คู่สมรสไม่มีเงินได้ (+60,000)")
+                children = st.number_input("บุตร (คนละ 30,000)", 0, 15, 0)
+                children2 = st.number_input("บุตรคนที่ 2+ เกิดปี 2561 ขึ้นไป (คนละ 60,000)", 0, 15, 0)
+            with g1b:
+                parents = st.number_input("อุปการะบิดามารดา (คนละ 30,000, สูงสุด 4)", 0, 4, 0)
+                disabled_care = st.number_input("ผู้พิการ/ทุพพลภาพในอุปการะ (คนละ 60,000)", 0, 10, 0)
+                maternity = st.number_input("ค่าฝากครรภ์-คลอดบุตร (สูงสุด 60,000)", 0.0, 60_000.0, 0.0, step=1000.0)
+
+        ded_g1 = (60_000 + (60_000 if spouse else 0) + children*30_000 + children2*60_000
+                  + parents*30_000 + disabled_care*60_000 + min(maternity, 60_000))
+
+        # ===== กลุ่ม 2: ประกัน การออม และการลงทุน =====
+        with st.expander("🛡️ กลุ่ม 2 — ประกัน การออม และการลงทุน (มีเพดานรวม)"):
+            g2a, g2b = st.columns(2)
+            with g2a:
+                social = st.number_input("ประกันสังคม (สูงสุด 9,000)", 0.0, 9_000.0, 0.0, step=100.0)
+                life_ins = st.number_input("ประกันชีวิตทั่วไป", 0.0, 100_000.0, 0.0, step=1000.0)
+                health_ins = st.number_input("ประกันสุขภาพตัวเอง (สูงสุด 25,000)", 0.0, 25_000.0, 0.0, step=1000.0)
+                health_parents = st.number_input("ประกันสุขภาพบิดามารดา (สูงสุด 15,000)", 0.0, 15_000.0, 0.0, step=1000.0)
+                thai_esg = st.number_input("กองทุน Thai ESG/ESGX (สูงสุด 300,000)", 0.0, 300_000.0, 0.0, step=1000.0)
+            with g2b:
+                st.markdown("**กลุ่มเกษียณ (เพดานรวม 500,000):**")
+                pension_ins = st.number_input("ประกันชีวิตแบบบำนาญ", 0.0, 200_000.0, 0.0, step=1000.0)
+                rmf = st.number_input("กองทุน RMF", 0.0, 500_000.0, 0.0, step=1000.0)
+                pvd = st.number_input("กองทุนสำรองเลี้ยงชีพ (PVD)", 0.0, 500_000.0, 0.0, step=1000.0)
+                gpf = st.number_input("กบข. (ข้าราชการ)", 0.0, 500_000.0, 0.0, step=1000.0)
+                teacher_fund = st.number_input("กองทุนสงเคราะห์ครูเอกชน", 0.0, 500_000.0, 0.0, step=1000.0)
+                nsf = st.number_input("กองทุนการออมแห่งชาติ กอช. (สูงสุด 30,000)", 0.0, 30_000.0, 0.0, step=1000.0)
+
+            life_health = life_ins + health_ins
+            if life_health > 100_000:
+                st.warning(f"⚠️ ประกันชีวิต + สุขภาพตัวเอง รวม {life_health:,.0f} เกินเพดาน 100,000 — ระบบจะใช้ 100,000")
+                life_health = 100_000
+
+            retire_sum = pension_ins + rmf + pvd + gpf + teacher_fund + nsf
+            if retire_sum > 500_000:
+                st.error(f"🚫 กลุ่มเกษียณรวม {retire_sum:,.0f} เกินเพดาน 500,000 — ระบบจะจำกัดที่ 500,000")
+                retire_sum = 500_000
+
+        ded_g2 = social + life_health + health_parents + retire_sum + thai_esg
+
+        # ===== กลุ่ม 3: อสังหาฯ และมาตรการกระตุ้นเศรษฐกิจ =====
+        with st.expander("🏠 กลุ่ม 3 — อสังหาฯ และมาตรการรัฐ"):
+            g3a, g3b = st.columns(2)
+            with g3a:
+                home_interest = st.number_input("ดอกเบี้ยที่อยู่อาศัย (สูงสุด 100,000)", 0.0, 100_000.0, 0.0, step=1000.0)
+                easy_ereceipt = st.number_input("Easy E-Receipt 2.0 (สูงสุด 50,000)", 0.0, 50_000.0, 0.0, step=1000.0)
+                new_home = st.number_input("ค่าก่อสร้างบ้านใหม่ (สูงสุด 100,000)", 0.0, 100_000.0, 0.0, step=1000.0)
+            with g3b:
+                travel_main = st.number_input("เที่ยวเมืองหลัก 1 เท่า (สูงสุด 20,000)", 0.0, 20_000.0, 0.0, step=1000.0)
+                travel_minor = st.number_input("เที่ยวเมืองรอง 1.5 เท่า (สูงสุด 30,000)", 0.0, 20_000.0, 0.0, step=1000.0)
+                cctv = st.number_input("CCTV ชายแดนใต้ (ม.40(5)-(8) ตามจริง)", 0.0, 1_000_000.0, 0.0, step=1000.0)
+
+        # เที่ยวเมืองรองหักได้ 1.5 เท่า สูงสุด 30,000
+        travel_minor_x = min(travel_minor * 1.5, 30_000)
+        ded_g3 = home_interest + easy_ereceipt + new_home + travel_main + travel_minor_x + cctv
+
+        # ===== กลุ่ม 4: เงินบริจาค =====
+        with st.expander("💝 กลุ่ม 4 — เงินบริจาค"):
+            g4a, g4b = st.columns(2)
+            with g4a:
+                donate_general = st.number_input("บริจาคทั่วไป (ไม่เกิน 10% ของเงินได้)", 0.0, 1_000_000.0, 0.0, step=500.0)
+                donate_edu = st.number_input("บริจาคการศึกษา/กีฬา/รพ.รัฐ/สังคม (หัก 2 เท่า)", 0.0, 500_000.0, 0.0, step=500.0)
+            with g4b:
+                donate_party = st.number_input("บริจาคพรรคการเมือง (สูงสุด 10,000)", 0.0, 10_000.0, 0.0, step=500.0)
+
+        donate_edu_x2 = donate_edu * 2
+        ded_before_donate = ded_g1 + ded_g2 + ded_g3
+        income_for_donate_cap = max(0.0, total_after_expense - ded_before_donate)
+        donate_cap = income_for_donate_cap * 0.10
+        donate_total = donate_general + donate_edu_x2
+        if donate_total > donate_cap:
+            st.info(f"ℹ️ เงินบริจาครวม {donate_total:,.0f} เกิน 10% ของเงินได้ ({donate_cap:,.0f}) — ระบบจะใช้เพดาน 10%")
+            donate_total = donate_cap
+        ded_g4 = donate_total + min(donate_party, 10_000)
+
+        ded = ded_g1 + ded_g2 + ded_g3 + ded_g4
+
+        with st.expander("🧾 ดูสรุปค่าลดหย่อนแต่ละกลุ่ม"):
+            st.write({
+                "กลุ่ม 1 ส่วนตัว/ครอบครัว": f"{ded_g1:,.0f}",
+                "กลุ่ม 2 ประกัน/ออม/ลงทุน": f"{ded_g2:,.0f}",
+                "กลุ่ม 3 อสังหาฯ/รัฐ": f"{ded_g3:,.0f}",
+                "กลุ่ม 4 บริจาค": f"{ded_g4:,.0f}",
+                "รวมทั้งหมด": f"{ded:,.0f}",
+            })
+
+        net = max(0.0, total_after_expense - ded)
+        tax, detail = calc_progressive_tax(net)
+
+        st.divider()
+        m1,m2,m3,m4 = st.columns(4)
+        m1.metric("เงินได้หลังหักค่าใช้จ่าย", f"{total_after_expense:,.0f}")
+        m2.metric("ค่าลดหย่อนรวม", f"-{ded:,.0f}")
+        m3.metric("เงินได้สุทธิ", f"{net:,.0f}")
+        m4.metric("ภาษีที่ต้องชำระ", f"{tax:,.0f}")
+
+        if detail:
+            st.markdown("**รายละเอียดการคำนวณขั้นบันได (มาตรา 48):**")
+            st.dataframe(pd.DataFrame(detail), use_container_width=True, hide_index=True)
+
+        if used_sections:
+            st.info("📑 มาตราที่ใช้ในการคำนวณ: " + ", ".join(sorted(set(used_sections))) + ", มาตรา 47 (ลดหย่อน), มาตรา 48 (อัตราภาษี)")
+
+        total_income = inc.amount.sum()
+        if total_income > 1_800_000:
+            st.error("🚨 รายรับเกิน 1.8 ล้านบาท/ปี — ต้องจดทะเบียน VAT (มาตรา 85/1)")
+
+        st.success(f"### 💸 ภาษีโดยประมาณ: {tax:,.2f} บาท")
+        st.caption("⚠️ เป็นการประมาณการเบื้องต้นตามอัตราปีภาษี 2568-2569 ควรตรวจสอบกับกรมสรรพากรหรือผู้เชี่ยวชาญก่อนยื่นจริง")
+
+        # ----- ตัวจำลองการกรอกแบบ ภ.ง.ด.90 -----
+        st.divider()
+        with st.expander("📝 ดูตัวอย่างการกรอกแบบ ภ.ง.ด.90 (สำหรับผู้ไม่เคยยื่น)"):
+            st.caption("จำลองว่าตัวเลขที่คำนวณได้ ไปลงช่องไหนในแบบยื่นภาษีจริง — เป็นแบบจำลองเพื่อการเรียนรู้ ไม่ใช่แบบฟอร์มราชการ")
+            st.markdown(f"""
+| ลำดับ | รายการในแบบ ภ.ง.ด.90 | จำนวนเงิน (บาท) |
+|---|---|---|
+| 1 | เงินได้พึงประเมินทั้งปี | {inc.amount.sum():,.2f} |
+| 2 | หัก ค่าใช้จ่าย (ตามประเภทเงินได้) | (ตามมาตรา 40 ที่เลือก) |
+| 3 | คงเหลือเงินได้หลังหักค่าใช้จ่าย | {total_after_expense:,.2f} |
+| 4 | หัก ค่าลดหย่อนรวม | {ded:,.2f} |
+| 5 | **เงินได้สุทธิ (นำไปคำนวณภาษี)** | **{net:,.2f}** |
+| 6 | ภาษีตามขั้นบันได (มาตรา 48) | {tax:,.2f} |
+| 7 | หัก ภาษีที่ถูกหัก ณ ที่จ่าย/ชำระล่วงหน้า | (ถ้ามี — กรอกเอง) |
+| 8 | **ภาษีที่ต้องชำระเพิ่ม / ขอคืน** | **{tax:,.2f}** |
+            """)
+            st.info("💡 ขั้นตอนยื่นจริง: เข้า efiling.rd.go.th → เข้าสู่ระบบด้วยเลขบัตรประชาชน → เลือกแบบ ภ.ง.ด.90 → กรอกตามช่อง 1-8 → ระบบคำนวณให้อัตโนมัติ → ยืนยันและพิมพ์ใบเสร็จ")
+            st.caption("กำหนดยื่น: 1 ม.ค. – 31 มี.ค. ปีถัดไป (ยื่นออนไลน์ขยายถึง 8 เม.ย.)")
+
+# =====================================================================
+#  TAB 3 — วิเคราะห์รายเดือน-รายปี
+# =====================================================================
+with tab3:
+    st.subheader("📊 วิเคราะห์รายรับ-รายจ่าย รายเดือนและรายปี")
+    conn = get_conn()
+    df = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
+    conn.close()
+
+    if df.empty:
+        st.info("ยังไม่มีข้อมูลให้วิเคราะห์")
+    else:
+        df["txn_date"] = pd.to_datetime(df["txn_date"])
+        df["เดือน"] = df["txn_date"].dt.to_period("M").astype(str)
+
+        pivot = df.pivot_table(index="เดือน", columns="txn_type",
+                               values="amount", aggfunc="sum", fill_value=0).reset_index()
+        for col in ["รายรับ", "รายจ่าย"]:
+            if col not in pivot.columns:
+                pivot[col] = 0
+        pivot["กำไรสุทธิ"] = pivot["รายรับ"] - pivot["รายจ่าย"]
+
+        st.markdown("##### 📅 สรุปรายเดือน")
+        st.dataframe(pivot, use_container_width=True, hide_index=True)
+
+        st.markdown("##### 📈 กราฟรายรับ-รายจ่ายรายเดือน")
+        chart_df = pivot.set_index("เดือน")[["รายรับ", "รายจ่าย"]]
+        st.bar_chart(chart_df)
+
+        st.markdown("##### 💹 กราฟกำไรสุทธิสะสม")
+        cumulative = pivot.set_index("เดือน")[["กำไรสุทธิ"]].cumsum()
+        st.line_chart(cumulative)
+
+        # ----- ปุ่ม Export รายงาน -----
+        st.divider()
+        st.markdown("##### 📤 ส่งออกรายงาน")
+        ex1, ex2, ex3 = st.columns(3)
+        with ex1:
+            excel_bytes = make_excel_report(df, USER)
+            st.download_button(
+                "📊 Excel (มีสรุปรายเดือน)",
+                data=excel_bytes,
+                file_name=f"TaxSmart_{USER}_{date.today().isoformat()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        with ex2:
+            csv_df = df.rename(columns={
+                "txn_date":"วันที่","txn_type":"ประเภท","income_type":"เงินได้ ม.40",
+                "category":"หมวดหมู่","description":"รายละเอียด","amount":"จำนวนเงิน"
+            })
+            csv_cols = [c for c in ["วันที่","ประเภท","เงินได้ ม.40","หมวดหมู่","รายละเอียด","จำนวนเงิน"] if c in csv_df.columns]
+            csv_bytes = csv_df[csv_cols].to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "📄 CSV (เปิดใน Excel)",
+                data=csv_bytes,
+                file_name=f"TaxSmart_{USER}_{date.today().isoformat()}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        with ex3:
+            try:
+                pdf_bytes = make_pdf_report(df, USER)
+                st.download_button(
+                    "📕 PDF (รายงานสรุป)",
+                    data=pdf_bytes,
+                    file_name=f"TaxSmart_{USER}_{date.today().isoformat()}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.button("📕 PDF (ไม่พร้อม)", disabled=True, use_container_width=True)
+                st.caption(f"PDF ต้องมีฟอนต์ไทยในเครื่อง: {e}")
+        st.caption("Excel มี 2 ชีต (รายการ + สรุปรายเดือน) | PDF เป็นรายงานสรุปพร้อมพิมพ์ | เปิดได้ทั้ง Excel และ Google Sheets")
+
+# =====================================================================
+#  TAB 4 — วางแผนการเงิน (คาดการณ์อนาคต)
+# =====================================================================
+with tab4:
+    st.subheader("🔮 คาดการณ์และวางแผนการเงินในอนาคต")
+    conn = get_conn()
+    df = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
+    conn.close()
+
+    if df.empty:
+        st.info("ยังไม่มีข้อมูลให้คาดการณ์ — บันทึกรายการอย่างน้อย 1-2 เดือนเพื่อให้พยากรณ์แม่นขึ้น")
+    else:
+        df["txn_date"] = pd.to_datetime(df["txn_date"])
+        df["เดือน"] = df["txn_date"].dt.to_period("M").astype(str)
+        n_months = df["เดือน"].nunique()
+
+        ti = df[df.txn_type=="รายรับ"].amount.sum()
+        te = df[df.txn_type=="รายจ่าย"].amount.sum()
+
+        avg_income = ti / n_months
+        avg_expense = te / n_months
+        avg_profit = avg_income - avg_expense
+
+        st.markdown(f"##### 📌 จากข้อมูล {n_months} เดือนที่ผ่านมา (ค่าเฉลี่ยต่อเดือน)")
+        a,b,c = st.columns(3)
+        a.metric("รายรับเฉลี่ย/เดือน", f"{avg_income:,.0f} บาท")
+        b.metric("รายจ่ายเฉลี่ย/เดือน", f"{avg_expense:,.0f} บาท")
+        c.metric("กำไรเฉลี่ย/เดือน", f"{avg_profit:,.0f} บาท")
+
+        st.divider()
+        st.markdown("##### 🎯 คาดการณ์สิ้นปี (12 เดือน)")
+        proj_income = avg_income * 12
+        proj_expense = avg_expense * 12
+        proj_profit = proj_income - proj_expense
+
+        # ประมาณภาษีสิ้นปี (สมมติ ม.40(8) หักเหมา 60% + ลดหย่อนส่วนตัว 60k)
+        proj_after_exp = proj_income * 0.40
+        proj_net = max(0.0, proj_after_exp - 60_000)
+        proj_tax, _ = calc_progressive_tax(proj_net)
+
+        p1,p2,p3 = st.columns(3)
+        p1.metric("รายรับคาดการณ์ทั้งปี", f"{proj_income:,.0f} บาท")
+        p2.metric("กำไรคาดการณ์ทั้งปี", f"{proj_profit:,.0f} บาท")
+        p3.metric("ภาษีที่คาดว่าต้องจ่าย", f"{proj_tax:,.0f} บาท")
+
+        st.divider()
+        st.markdown("##### 💡 ข้อแนะนำการวางแผน")
+        if proj_income > 1_800_000:
+            st.warning("• รายรับคาดว่าจะเกิน 1.8 ล้าน/ปี — เตรียมจดทะเบียน VAT และวางแผนภาษีมูลค่าเพิ่ม")
+        if proj_tax > 0:
+            saving = min(proj_net * 0.30, 500_000)
+            st.info(f"• พิจารณาซื้อ RMF/SSF เพื่อลดหย่อนได้สูงสุดราว {saving:,.0f} บาท ช่วยลดภาษีในขั้นบันไดสูงสุดของคุณ")
+        if avg_profit < 0:
+            st.error("• กำไรเฉลี่ยติดลบ — ควรทบทวนค่าใช้จ่ายที่สูงผิดปกติในแท็บวิเคราะห์")
+        else:
+            months_to_save = (avg_profit * 6)
+            st.success(f"• หากเก็บกำไรไว้ 6 เดือน จะมีเงินสำรองราว {months_to_save:,.0f} บาท เป็นเงินทุนหมุนเวียน")
+
+        st.caption("⚠️ การคาดการณ์ใช้วิธีค่าเฉลี่ยเชิงเส้นจากข้อมูลจริง ยิ่งมีข้อมูลหลายเดือนยิ่งแม่นยำ ไม่ใช่การรับประกันผลในอนาคต")
+
+# =====================================================================
+#  TAB 6 — ภาษีครึ่งปี (ภ.ง.ด.94) มาตรา 56 ทวิ
+# =====================================================================
+with tab6:
+    st.subheader("📅 ภาษีเงินได้ครึ่งปี (ภ.ง.ด.94)")
+    st.caption("เฉพาะเงินได้ ม.40(5)-(8) ที่ได้รับ ม.ค.-มิ.ย. | ลดหย่อนใช้ได้ครึ่งเดียว แต่อัตราภาษีเท่าเดิม (ม.56 ทวิ)")
+
+    # เงินได้ที่ต้องยื่น ภ.ง.ด.94 = ม.40(5),(6),(7),(8) เท่านั้น
+    HALFYEAR_TYPES = {
+        "40(5) ค่าเช่าทรัพย์สิน": 0.30,
+        "40(6) วิชาชีพอิสระ": 0.30,
+        "40(7) รับเหมา (ค่าแรง+ของ)": 0.60,
+        "40(8) ธุรกิจ/ค้าขาย": 0.60,
+    }
+
+    conn = get_conn()
+    inc_h = pd.read_sql_query(
+        "SELECT * FROM transactions WHERE txn_type='รายรับ' AND user_id=?",
+        conn, params=(USER,)
+    )
+    conn.close()
+
+    # กรองเฉพาะเดือน ม.ค.-มิ.ย.
+    if not inc_h.empty:
+        inc_h["txn_date"] = pd.to_datetime(inc_h["txn_date"])
+        inc_h = inc_h[inc_h["txn_date"].dt.month <= 6]
+
+    # เก็บเฉพาะเงินได้ประเภทที่ต้องยื่น ภ.ง.ด.94
+    if not inc_h.empty:
+        inc_h = inc_h[inc_h["income_type"].isin(HALFYEAR_TYPES.keys())]
+
+    if inc_h.empty:
+        st.info("ยังไม่มีเงินได้ ม.40(5)-(8) ในช่วง ม.ค.-มิ.ย. — บันทึกรายรับและระบุประเภทเงินได้ก่อน")
+    else:
+        st.markdown("##### 📥 เงินได้ครึ่งปีแรก (ม.ค.-มิ.ย.) แยกตามประเภท")
+        grouped_h = inc_h.groupby("income_type")["amount"].sum().reset_index()
+
+        total_after_exp_h = 0.0
+        total_income_h = 0.0
+        for _, row in grouped_h.iterrows():
+            it = row["income_type"]
+            amt = row["amount"]
+            rate = HALFYEAR_TYPES.get(it, 0.0)
+            expense = amt * rate
+            after = amt - expense
+            total_after_exp_h += after
+            total_income_h += amt
+            st.markdown(f"**{it}** — รายรับ {amt:,.0f} | หักค่าใช้จ่ายเหมา {rate*100:.0f}% = {expense:,.0f} | เหลือ {after:,.0f} บาท")
+
+        st.divider()
+        st.markdown("##### 📋 ค่าลดหย่อน (ภ.ง.ด.94 ใช้ได้ครึ่งเดียวของสิทธิทั้งปี)")
+        st.caption("ตามมาตรา 56 ทวิ — ลดหย่อนส่วนตัวครึ่งปี = 30,000 บาท")
+        h1, h2 = st.columns(2)
+        with h1:
+            st.text("ลดหย่อนส่วนตัวครึ่งปี: 30,000 (อัตโนมัติ)")
+            h_spouse = st.checkbox("คู่สมรสไม่มีเงินได้ (+30,000)", key="h_spouse")
+            h_social = st.number_input("ประกันสังคมครึ่งปี (สูงสุด 4,500)", 0.0, 4_500.0, 0.0, step=100.0, key="h_social")
+        with h2:
+            h_life = st.number_input("ประกันชีวิตครึ่งปี (สูงสุด 50,000)", 0.0, 50_000.0, 0.0, step=1000.0, key="h_life")
+            h_rmf = st.number_input("RMF/กองทุนเกษียณครึ่งปี (สูงสุด 250,000)", 0.0, 250_000.0, 0.0, step=1000.0, key="h_rmf")
+
+        ded_h = 30_000 + (30_000 if h_spouse else 0) + h_social + h_life + h_rmf
+
+        net_h = max(0.0, total_after_exp_h - ded_h)
+        tax_h, detail_h = calc_progressive_tax(net_h)
+
+        st.divider()
+        mh1, mh2, mh3, mh4 = st.columns(4)
+        mh1.metric("เงินได้หลังหักค่าใช้จ่าย", f"{total_after_exp_h:,.0f}")
+        mh2.metric("ลดหย่อนครึ่งปี", f"-{ded_h:,.0f}")
+        mh3.metric("เงินได้สุทธิครึ่งปี", f"{net_h:,.0f}")
+        mh4.metric("ภาษีครึ่งปี", f"{tax_h:,.0f}")
+
+        if detail_h:
+            st.markdown("**รายละเอียดขั้นบันได (อัตราเดียวกับทั้งปี ม.48):**")
+            st.dataframe(pd.DataFrame(detail_h), use_container_width=True, hide_index=True)
+
+        # เช็คเกณฑ์ต้องยื่น
+        if total_income_h > 60_000:
+            st.warning(f"📌 เงินได้ครึ่งปีแรก {total_income_h:,.0f} บาท เกิน 60,000 — มีหน้าที่ยื่น ภ.ง.ด.94 ภายใน 30 ก.ย. (ออนไลน์ถึง 8 ต.ค.)")
+        else:
+            st.info(f"เงินได้ครึ่งปีแรก {total_income_h:,.0f} บาท ไม่เกิน 60,000 — ยังไม่ถึงเกณฑ์ต้องยื่น ภ.ง.ด.94")
+
+        st.success(f"### 💸 ภาษีครึ่งปีโดยประมาณ: {tax_h:,.2f} บาท")
+        st.caption("⚠️ ภาษีที่จ่ายตอนครึ่งปีนำไปหักออกจากภาษีทั้งปีได้ (เครดิตภาษี) | ประมาณการเบื้องต้น ควรตรวจสอบกับกรมสรรพากร")
+
+        # ----- ตัวจำลองการกรอกแบบ ภ.ง.ด.94 -----
+        st.divider()
+        with st.expander("📝 ดูตัวอย่างการกรอกแบบ ภ.ง.ด.94 (สำหรับผู้ไม่เคยยื่น)"):
+            st.caption("จำลองว่าตัวเลขที่คำนวณได้ ไปลงช่องไหนในแบบยื่นภาษีครึ่งปีจริง — เป็นแบบจำลองเพื่อการเรียนรู้ ไม่ใช่แบบฟอร์มราชการ")
+            st.markdown(f"""
+| ลำดับ | รายการในแบบ ภ.ง.ด.94 | จำนวนเงิน (บาท) |
+|---|---|---|
+| 1 | เงินได้ ม.40(5)-(8) ครึ่งปีแรก (ม.ค.-มิ.ย.) | {total_income_h:,.2f} |
+| 2 | หัก ค่าใช้จ่าย (ตามประเภทเงินได้) | (ตามมาตรา 40 ที่เลือก) |
+| 3 | คงเหลือเงินได้หลังหักค่าใช้จ่าย | {total_after_exp_h:,.2f} |
+| 4 | หัก ค่าลดหย่อนรวม (ใช้ได้ครึ่งเดียว ม.56 ทวิ) | {ded_h:,.2f} |
+| 5 | **เงินได้สุทธิครึ่งปี (นำไปคำนวณภาษี)** | **{net_h:,.2f}** |
+| 6 | ภาษีตามขั้นบันได (อัตราเต็ม ม.48) | {tax_h:,.2f} |
+| 7 | หัก ภาษีที่ถูกหัก ณ ที่จ่าย (ถ้ามี) | (กรอกเอง) |
+| 8 | **ภาษีครึ่งปีที่ต้องชำระ** | **{tax_h:,.2f}** |
+            """)
+            st.info("💡 ขั้นตอนยื่นจริง: เข้า efiling.rd.go.th → เข้าสู่ระบบด้วยเลขบัตรประชาชน → เลือกแบบ ภ.ง.ด.94 → กรอกตามช่อง 1-8 → ระบบคำนวณให้อัตโนมัติ → ยืนยันและพิมพ์ใบเสร็จ")
+            st.caption("กำหนดยื่น: 1 ก.ค. – 30 ก.ย. ของปีภาษี (ยื่นออนไลน์ขยายถึง 8 ต.ค.) | ภาษีนี้นำไปเป็นเครดิตหักออกจาก ภ.ง.ด.90 ตอนสิ้นปีได้")
+
+# =====================================================================
+#  TAB 7 — VAT (ภ.พ.30) ภาษีมูลค่าเพิ่ม
+# =====================================================================
+with tab7:
+    st.subheader("🧾 ภาษีมูลค่าเพิ่ม (ภ.พ.30)")
+    st.caption("ภาษีขาย (7% ของรายรับ) − ภาษีซื้อ (7% ของรายจ่าย) | ยื่นทุกเดือน ภายในวันที่ 15 ของเดือนถัดไป")
+
+    VAT_RATE = 0.07
+
+    conn = get_conn()
+    df_v = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
+    conn.close()
+
+    if df_v.empty:
+        st.info("ยังไม่มีข้อมูล — บันทึกรายรับ/รายจ่ายก่อน")
+    else:
+        df_v["txn_date"] = pd.to_datetime(df_v["txn_date"])
+        total_income_y = df_v[df_v.txn_type=="รายรับ"].amount.sum()
+
+        # ตรวจว่าต้องจด VAT หรือไม่
+        if total_income_y > 1_800_000:
+            st.error(f"🚨 รายรับรวม {total_income_y:,.0f} บาท เกิน 1.8 ล้าน/ปี — ต้องจดทะเบียน VAT (มาตรา 85/1)")
+        else:
+            st.warning(f"ℹ️ รายรับรวม {total_income_y:,.0f} บาท ยังไม่เกิน 1.8 ล้าน/ปี — ยังไม่บังคับจด VAT (คำนวณเพื่อดูประมาณการได้)")
+
+        st.divider()
+        st.markdown("##### 📅 เลือกเดือนที่ต้องการคำนวณ VAT")
+        df_v["เดือน"] = df_v["txn_date"].dt.to_period("M").astype(str)
+        months = sorted(df_v["เดือน"].unique(), reverse=True)
+        sel_month = st.selectbox("เดือนภาษี", months)
+
+        month_data = df_v[df_v["เดือน"] == sel_month]
+        sale = month_data[month_data.txn_type=="รายรับ"].amount.sum()
+        purchase = month_data[month_data.txn_type=="รายจ่าย"].amount.sum()
+
+        vat_sale = round(sale * VAT_RATE, 2)
+        vat_purchase = round(purchase * VAT_RATE, 2)
+        vat_payable = round(vat_sale - vat_purchase, 2)
+
+        st.markdown(f"##### 📊 สรุป VAT เดือน {sel_month}")
+        v1, v2, v3 = st.columns(3)
+        v1.metric("ยอดขาย / ภาษีขาย 7%", f"{sale:,.0f}", f"VAT {vat_sale:,.2f}")
+        v2.metric("ยอดซื้อ / ภาษีซื้อ 7%", f"{purchase:,.0f}", f"VAT {vat_purchase:,.2f}")
+        if vat_payable >= 0:
+            v3.metric("ภาษีที่ต้องนำส่ง", f"{vat_payable:,.2f}", "ชำระเพิ่ม", delta_color="inverse")
+        else:
+            v3.metric("ภาษีชำระเกิน (ยกไปเดือนหน้า)", f"{abs(vat_payable):,.2f}", "เครดิตภาษี")
+
+        st.divider()
+        st.markdown("##### 📋 ตาราง VAT ทุกเดือน")
+        monthly = df_v.pivot_table(index="เดือน", columns="txn_type", values="amount", aggfunc="sum", fill_value=0).reset_index()
+        for col in ["รายรับ","รายจ่าย"]:
+            if col not in monthly.columns:
+                monthly[col] = 0
+        monthly["ภาษีขาย 7%"] = (monthly["รายรับ"] * VAT_RATE).round(2)
+        monthly["ภาษีซื้อ 7%"] = (monthly["รายจ่าย"] * VAT_RATE).round(2)
+        monthly["VAT ต้องนำส่ง"] = (monthly["ภาษีขาย 7%"] - monthly["ภาษีซื้อ 7%"]).round(2)
+        st.dataframe(monthly[["เดือน","รายรับ","ภาษีขาย 7%","รายจ่าย","ภาษีซื้อ 7%","VAT ต้องนำส่ง"]],
+                     use_container_width=True, hide_index=True)
+
+        if vat_payable >= 0:
+            st.success(f"### 💸 VAT ที่ต้องนำส่งเดือน {sel_month}: {vat_payable:,.2f} บาท")
+        else:
+            st.info(f"### เดือน {sel_month} ภาษีซื้อมากกว่าภาษีขาย — ไม่ต้องชำระ ยกเครดิต {abs(vat_payable):,.2f} บาทไปเดือนหน้า")
+        st.caption("⚠️ ต้องยื่น ภ.พ.30 ทุกเดือนแม้ยอดเป็นศูนย์ | ประมาณการเบื้องต้น สมมติทุกรายการมี VAT 7% ควรตรวจสอบรายการยกเว้น VAT กับกรมสรรพากร")
+
+# =====================================================================
+#  TAB 8 — ภาษีหัก ณ ที่จ่าย (Withholding Tax)
+# =====================================================================
+with tab8:
+    st.subheader("✂️ คำนวณภาษีหัก ณ ที่จ่าย (ภ.ง.ด.3)")
+    st.caption("ผู้จ่ายเงินหักภาษีไว้ล่วงหน้าจากผู้รับ แล้วนำส่งกรมสรรพากร | อัตราขึ้นกับประเภทเงินได้")
+
+    WHT_RATES = {
+        "ค่าจ้างทำของ/รับเหมา (3%)": 0.03,
+        "ค่าบริการ/ค่าวิชาชีพ (3%)": 0.03,
+        "ค่าจ้างวิทยากร/ที่ปรึกษา (3%)": 0.03,
+        "ค่าเช่าอสังหาริมทรัพย์ (5%)": 0.05,
+        "ค่าเช่ารถ/ค่าจ้างนักแสดง (5%)": 0.05,
+        "ค่าโฆษณา (2%)": 0.02,
+        "เงินรางวัล/ชิงโชค (5%)": 0.05,
+    }
+
+    st.markdown("##### 🧮 เครื่องคำนวณ")
+    wc1, wc2 = st.columns(2)
+    with wc1:
+        wht_type = st.selectbox("ประเภทเงินที่จ่าย", list(WHT_RATES.keys()))
+        pay_amount = st.number_input("จำนวนเงินที่จ่าย (ก่อนหัก)", min_value=0.0, step=1000.0, format="%.2f")
+    with wc2:
+        gross_up = st.checkbox("ผู้จ่ายออกภาษีให้ (gross-up)",
+                               help="กรณีผู้จ่ายรับภาระภาษีแทนผู้รับ ใช้สูตร เงิน × อัตรา/(1-อัตรา)")
+
+    rate = WHT_RATES[wht_type]
+    if pay_amount > 0:
+        if gross_up:
+            wht = pay_amount * rate / (1 - rate)
+            note = "ผู้จ่ายออกภาษีให้ — ผู้รับได้เงินเต็มจำนวน"
+        else:
+            wht = pay_amount * rate
+            note = "หักจากผู้รับ — ผู้รับได้เงินหลังหักภาษี"
+        net_paid = pay_amount - (0 if gross_up else wht)
+
+        st.divider()
+        wm1, wm2, wm3 = st.columns(3)
+        wm1.metric("อัตราหัก ณ ที่จ่าย", f"{rate*100:.0f}%")
+        wm2.metric("ภาษีหัก ณ ที่จ่าย", f"{wht:,.2f} บาท")
+        if gross_up:
+            wm3.metric("ผู้รับได้รับจริง", f"{pay_amount:,.2f} บาท")
+        else:
+            wm3.metric("ผู้รับได้รับจริง", f"{net_paid:,.2f} บาท")
+        st.info(f"📌 {note} | ต้องออกหนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ) ให้ผู้รับ และยื่น ภ.ง.ด.3 ภายในวันที่ 7 ของเดือนถัดไป")
+
+    st.divider()
+    st.markdown("##### 📋 ตารางอัตราหัก ณ ที่จ่าย (บุคคลธรรมดา ปี 2568)")
+    st.markdown("""
+    | ประเภทเงินได้ | อัตรา | มาตรา |
+    |---|---|---|
+    | ค่าจ้างทำของ / รับเหมา | 3% | ม.3 เตรส |
+    | ค่าบริการ / ค่าวิชาชีพอิสระ | 3% | ม.3 เตรส |
+    | ค่าเช่าอสังหาริมทรัพย์ | 5% | ม.5 |
+    | ค่าเช่ารถ / ค่าจ้างนักแสดง / เงินรางวัล | 5% | ม.3 เตรส |
+    | ค่าโฆษณา | 2% | ม.3 เตรส |
+    """)
+    st.caption("⚠️ อัตราอาจต่างกันตามลักษณะธุรกรรม เช่น ค่าจ้างฟรีแลนซ์ที่เข้าข่ายเงินเดือนต้องหักตามอัตราก้าวหน้า ควรตรวจสอบกับกรมสรรพากร")
+
+# =====================================================================
+#  TAB 9 — โมดูลคำนวณต้นทุนสินค้า (FIFO / Weighted Average) ตาม TAS 2
+# =====================================================================
+with tab9:
+    st.subheader("📦 คำนวณต้นทุนสินค้า (FIFO / ถัวเฉลี่ยถ่วงน้ำหนัก)")
+    st.caption("อ้างอิงมาตรฐานการบัญชี TAS 2 สินค้าคงเหลือ | บันทึกการซื้อเข้า-ขายออก ระบบคำนวณต้นทุนขาย (COGS) และสินค้าคงเหลือให้")
+
+    # ฟอร์มบันทึกการเคลื่อนไหวสินค้า
+    with st.form("inv_form", clear_on_submit=True):
+        st.markdown("##### ➕ บันทึกการเคลื่อนไหวสินค้า")
+        ic1, ic2, ic3, ic4 = st.columns(4)
+        with ic1:
+            inv_date = st.date_input("วันที่", value=date.today(), key="inv_date")
+        with ic2:
+            product = st.text_input("ชื่อสินค้า", placeholder="เช่น ปลาทู")
+        with ic3:
+            move_type = st.selectbox("ประเภท", ["ซื้อเข้า", "ขายออก"])
+            qty = st.number_input("จำนวน", min_value=0.0, step=1.0)
+        with ic4:
+            unit_cost = st.number_input("ต้นทุน/หน่วย (เฉพาะซื้อเข้า)", min_value=0.0, step=1.0,
+                                        help="ใส่เฉพาะตอนซื้อเข้า ตอนขายออกไม่ต้องใส่")
+        if st.form_submit_button("💾 บันทึก", use_container_width=True):
+            if not product.strip() or qty <= 0:
+                st.error("กรุณากรอกชื่อสินค้าและจำนวนให้ครบ")
+            else:
+                conn = get_conn()
+                conn.execute(
+                    "INSERT INTO inventory (user_id, move_date, product, move_type, qty, unit_cost) VALUES (?,?,?,?,?,?)",
+                    (USER, inv_date.isoformat(), product.strip(), move_type, qty, unit_cost if move_type=="ซื้อเข้า" else None)
+                )
+                conn.commit(); conn.close()
+                st.success(f"✅ บันทึก {move_type} {product} จำนวน {qty:,.0f} เรียบร้อย")
+
+    conn = get_conn()
+    inv_df = pd.read_sql_query(
+        "SELECT * FROM inventory WHERE user_id=? ORDER BY move_date, id", conn, params=(USER,)
+    )
+    conn.close()
+
+    if inv_df.empty:
+        st.info("ยังไม่มีข้อมูลสินค้า — บันทึกการซื้อเข้า/ขายออกด้านบนก่อน")
+    else:
+        st.divider()
+        products = sorted(inv_df["product"].unique())
+        sel_product = st.selectbox("เลือกสินค้าที่ต้องการคำนวณต้นทุน", products)
+        method = st.radio("วิธีคำนวณต้นทุน (TAS 2)", ["FIFO (เข้าก่อนออกก่อน)", "Weighted Average (ถัวเฉลี่ย)"], horizontal=True)
+
+        prod_moves = inv_df[inv_df["product"] == sel_product].to_dict("records")
+
+        if "FIFO" in method:
+            cogs, ending_value, ending_qty = calc_fifo(prod_moves)
+        else:
+            cogs, ending_value, ending_qty = calc_weighted_avg(prod_moves)
+
+        st.markdown(f"##### 📊 ผลการคำนวณ — {sel_product}")
+        cc1, cc2, cc3 = st.columns(3)
+        cc1.metric("ต้นทุนขายรวม (COGS)", f"{cogs:,.2f} บาท")
+        cc2.metric("มูลค่าสินค้าคงเหลือ", f"{ending_value:,.2f} บาท")
+        cc3.metric("จำนวนคงเหลือ", f"{ending_qty:,.0f} หน่วย")
+
+        st.markdown("##### 📋 ประวัติการเคลื่อนไหว")
+        show_inv = prod_moves
+        inv_show_df = pd.DataFrame(show_inv).rename(columns={
+            "move_date":"วันที่","move_type":"ประเภท","qty":"จำนวน","unit_cost":"ต้นทุน/หน่วย"
+        })
+        st.dataframe(inv_show_df[["วันที่","ประเภท","จำนวน","ต้นทุน/หน่วย"]],
+                     use_container_width=True, hide_index=True)
+
+        st.info("💡 FIFO เหมาะกับสินค้าที่มีวันหมดอายุ (ขายของเก่าก่อน) | Weighted Average เหมาะกับสินค้าที่คละกันได้ เช่น วัตถุดิบ")
+        st.caption("⚠️ ตาม TAS 2 ใช้ได้ทั้ง FIFO และ Weighted Average (ห้ามใช้ LIFO) ควรใช้วิธีเดียวสม่ำเสมอตามมาตรา TAS 8")
+
+# =====================================================================
+#  TAB 5 — คลังกฎหมายภาษี
+# =====================================================================
+with tab5:
+    st.subheader("📖 คลังความรู้ประเภทเงินได้ตามมาตรา 40")
+    st.caption("อ้างอิงประมวลรัษฎากร หมวด 3 ภาษีเงินได้")
+    for name, info in INCOME_TYPES.items():
+        with st.expander(f"📑 {name}  ({info['section']})"):
+            st.markdown(f"**คำอธิบาย:** {info['note']}")
+            st.markdown(f"**วิธีหักค่าใช้จ่าย:** {info['expense_rule']}")
+    st.divider()
+    st.markdown("""
+    **มาตราสำคัญอื่นๆ ที่ระบบใช้อ้างอิง:**
+    - **มาตรา 39** — นิยาม "เงินได้พึงประเมิน"
+    - **มาตรา 42** — เงินได้ที่ยกเว้นภาษี (25 รายการ)
+    - **มาตรา 47** — ค่าลดหย่อนทุกประเภท
+    - **มาตรา 48** — อัตราภาษีขั้นบันได 5-35%
+    - **มาตรา 48(2)** — ภาษีขั้นต่ำ 0.5% ของเงินได้
+    - **มาตรา 56 / 56 ทวิ** — การยื่นแบบ ภ.ง.ด.90/94
+    - **มาตรา 85/1** — เกณฑ์จดทะเบียน VAT (รายได้เกิน 1.8 ล้าน/ปี)
+    """)
+
+    st.divider()
+    st.markdown("##### 📋 รายการลดหย่อน ปีภาษี 2568 (อ้างอิง ภ.ง.ด.90/91)")
+    with st.expander("👤 กลุ่ม 1 — ส่วนตัวและครอบครัว"):
+        st.markdown("""
+        - ลดหย่อนส่วนตัว: 60,000 | คู่สมรสไม่มีเงินได้: 60,000
+        - บุตร: 30,000/คน (คนที่ 2 ที่เกิดปี 2561+ ได้ 60,000)
+        - บิดามารดา (อายุ 60+ รายได้ไม่เกิน 30,000): 30,000/คน สูงสุด 4 คน
+        - ผู้พิการ/ทุพพลภาพในอุปการะ: 60,000/คน
+        - ค่าฝากครรภ์-คลอดบุตร: ตามจ่ายจริง สูงสุด 60,000
+        """)
+    with st.expander("🛡️ กลุ่ม 2 — ประกันและการลงทุน"):
+        st.markdown("""
+        - ประกันสังคม: สูงสุด 9,000
+        - ประกันชีวิต + สุขภาพตัวเอง: **รวมไม่เกิน 100,000** (สุขภาพแยกไม่เกิน 25,000)
+        - ประกันสุขภาพบิดามารดา: สูงสุด 15,000
+        - ประกันชีวิตแบบบำนาญ: 15% ของเงินได้ สูงสุด 200,000
+        - กองทุน RMF: 30% ของเงินได้ สูงสุด 500,000
+        - กองทุน Thai ESG: 30% ของเงินได้ สูงสุด 300,000 (แยกวงเงิน)
+        - **เพดานรวมกลุ่มเกษียณ (บำนาญ+RMF+สำรองเลี้ยงชีพ+Thai ESG) ไม่เกิน 500,000**
+        - หมายเหตุ: SSF ยกเลิกสิทธิแล้วในปี 2568
+        """)
+    with st.expander("🏠 กลุ่ม 3 — อสังหาฯ และมาตรการรัฐ"):
+        st.markdown("""
+        - ดอกเบี้ยที่อยู่อาศัย: สูงสุด 100,000
+        - Easy E-Receipt 2.0: สูงสุด 50,000 (ซื้อ 16 ม.ค.–28 ก.พ. 2568)
+        - ค่าก่อสร้างบ้านใหม่: 10,000 ต่อค่าก่อสร้าง 1 ล้าน สูงสุด 100,000
+        - ค่าท่องเที่ยวเมืองหลัก/รอง: ตามประกาศกรมสรรพากร
+        """)
+    with st.expander("💝 กลุ่ม 4 — เงินบริจาค"):
+        st.markdown("""
+        - บริจาคทั่วไป: ตามจริง ไม่เกิน 10% ของเงินได้หลังหักลดหย่อน
+        - บริจาคการศึกษา/กีฬา/รพ.รัฐ: หักได้ 2 เท่า (รวมไม่เกิน 10%)
+        - บริจาคพรรคการเมือง: สูงสุด 10,000
+        """)

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TaxSmart — จัดการภาษีและบัญชี ง่ายในที่เดียว</title>
+<style>
+  :root{
+    --ink:#0B0A1F;
+    --slate:#16142E;
+    --violet:#7F77DD;
+    --violet-deep:#534AB7;
+    --mint:#1D9E75;
+    --mint-soft:#5DCAA5;
+    --paper:#F4F3FB;
+    --muted:#A8A4C8;
+    --line:rgba(255,255,255,0.08);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:'Segoe UI','Helvetica Neue',Arial,'Noto Sans Thai',sans-serif;
+    background:var(--ink);
+    color:var(--paper);
+    overflow-x:hidden;
+    line-height:1.6;
+  }
+  #bg-canvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:0}
+  .wrap{position:relative;z-index:1}
+
+  /* NAV */
+  nav{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:22px 6vw;position:sticky;top:0;z-index:10;
+    backdrop-filter:blur(12px);background:rgba(11,10,31,0.55);
+    border-bottom:1px solid var(--line);
+  }
+  .logo{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:700;letter-spacing:-0.3px}
+  .logo-mark{
+    width:32px;height:32px;border-radius:9px;
+    background:linear-gradient(135deg,var(--violet),var(--mint));
+    display:flex;align-items:center;justify-content:center;font-size:17px;
+  }
+  .nav-cta{
+    padding:10px 22px;border-radius:10px;font-size:14px;font-weight:600;
+    background:var(--paper);color:var(--ink);text-decoration:none;
+    transition:transform .2s,box-shadow .2s;
+  }
+  .nav-cta:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(127,119,221,0.4)}
+
+  /* HERO */
+  .hero{
+    min-height:88vh;display:flex;flex-direction:column;justify-content:center;
+    padding:0 6vw;max-width:1100px;
+  }
+  .eyebrow{
+    display:inline-flex;align-items:center;gap:8px;width:fit-content;
+    padding:7px 16px;border-radius:30px;font-size:13px;font-weight:600;
+    background:rgba(127,119,221,0.14);border:1px solid rgba(127,119,221,0.3);
+    color:var(--mint-soft);margin-bottom:28px;
+  }
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--mint);box-shadow:0 0 12px var(--mint)}
+  h1{
+    font-size:clamp(38px,6.5vw,76px);line-height:1.05;font-weight:800;
+    letter-spacing:-1.5px;margin-bottom:26px;
+  }
+  h1 .grad{
+    background:linear-gradient(120deg,var(--violet) 10%,var(--mint-soft) 90%);
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+  }
+  .lead{font-size:clamp(16px,2vw,21px);color:var(--muted);max-width:560px;margin-bottom:40px}
+  .hero-actions{display:flex;gap:16px;flex-wrap:wrap}
+  .btn-primary{
+    padding:16px 34px;border-radius:13px;font-size:16px;font-weight:700;
+    background:linear-gradient(135deg,var(--violet),var(--violet-deep));
+    color:#fff;text-decoration:none;border:none;cursor:pointer;
+    transition:transform .2s,box-shadow .2s;
+    box-shadow:0 8px 30px rgba(83,74,183,0.4);
+  }
+  .btn-primary:hover{transform:translateY(-3px);box-shadow:0 14px 40px rgba(83,74,183,0.6)}
+  .btn-ghost{
+    padding:16px 30px;border-radius:13px;font-size:16px;font-weight:600;
+    background:transparent;color:var(--paper);text-decoration:none;
+    border:1px solid var(--line);transition:background .2s,border-color .2s;
+  }
+  .btn-ghost:hover{background:rgba(255,255,255,0.04);border-color:var(--violet)}
+
+  /* STATS strip */
+  .stats{display:flex;gap:48px;margin-top:64px;flex-wrap:wrap}
+  .stat-num{font-size:34px;font-weight:800;letter-spacing:-1px}
+  .stat-num .u{color:var(--mint-soft)}
+  .stat-label{font-size:13px;color:var(--muted);margin-top:2px}
+
+  /* FEATURES */
+  .section{padding:90px 6vw;max-width:1100px;margin:0 auto}
+  .sec-head{margin-bottom:50px}
+  .sec-tag{font-size:13px;font-weight:700;color:var(--mint);letter-spacing:1px;text-transform:uppercase}
+  h2{font-size:clamp(28px,4vw,44px);font-weight:800;letter-spacing:-1px;margin-top:12px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:20px}
+  .card{
+    padding:30px;border-radius:18px;
+    background:rgba(255,255,255,0.03);border:1px solid var(--line);
+    transition:transform .25s,border-color .25s,background .25s;
+  }
+  .card:hover{transform:translateY(-6px);border-color:rgba(127,119,221,0.4);background:rgba(127,119,221,0.06)}
+  .card-ico{
+    width:48px;height:48px;border-radius:13px;margin-bottom:18px;
+    background:linear-gradient(135deg,rgba(127,119,221,0.25),rgba(29,158,117,0.25));
+    display:flex;align-items:center;justify-content:center;font-size:24px;
+  }
+  .card h3{font-size:19px;font-weight:700;margin-bottom:10px}
+  .card p{font-size:14.5px;color:var(--muted)}
+
+  /* CTA band */
+  .cta-band{
+    margin:40px 6vw 0;padding:60px 40px;border-radius:28px;text-align:center;
+    background:linear-gradient(135deg,rgba(83,74,183,0.25),rgba(29,158,117,0.18));
+    border:1px solid rgba(127,119,221,0.3);
+  }
+  .cta-band h2{margin-bottom:16px}
+  .cta-band p{color:var(--muted);margin-bottom:30px;font-size:17px}
+
+  /* CONTACT / FOOTER */
+  footer{padding:70px 6vw 50px;border-top:1px solid var(--line);margin-top:90px}
+  .foot-grid{display:flex;justify-content:space-between;flex-wrap:wrap;gap:40px;max-width:1100px;margin:0 auto}
+  .foot-brand{max-width:300px}
+  .foot-brand p{color:var(--muted);font-size:14px;margin-top:14px}
+  .contact-list{display:flex;flex-direction:column;gap:16px}
+  .contact-title{font-size:14px;font-weight:700;color:var(--mint);letter-spacing:0.5px;margin-bottom:6px}
+  .contact-item{display:flex;align-items:center;gap:12px;color:var(--paper);text-decoration:none;font-size:15px;transition:color .2s}
+  .contact-item:hover{color:var(--mint-soft)}
+  .ci-ico{
+    width:38px;height:38px;border-radius:10px;flex-shrink:0;
+    background:rgba(255,255,255,0.05);border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;font-size:17px;
+  }
+  .copyright{text-align:center;color:var(--muted);font-size:13px;margin-top:50px;padding-top:30px;border-top:1px solid var(--line)}
+
+  .reveal{opacity:0;transform:translateY(30px);transition:opacity .7s,transform .7s}
+  .reveal.show{opacity:1;transform:none}
+
+  @media(max-width:640px){
+    .stats{gap:30px}
+    nav{padding:18px 5vw}
+    .hero{min-height:80vh}
+  }
+</style>
+</head>
+<body>
+<canvas id="bg-canvas"></canvas>
+<div class="wrap">
+
+  <nav>
+    <div class="logo"><span class="logo-mark">฿</span> TaxSmart</div>
+    <a href="#" class="nav-cta" id="nav-launch">เข้าใช้งาน</a>
+  </nav>
+
+  <header class="hero">
+    <span class="eyebrow"><span class="dot"></span> อ้างอิงประมวลรัษฎากร ปีภาษี 2568-2569</span>
+    <h1>ภาษีและบัญชี<br><span class="grad">จัดการง่าย</span> ในที่เดียว</h1>
+    <p class="lead">บันทึกรายรับรายจ่าย คำนวณภาษีอัตโนมัติ วางแผนการเงิน และส่งออกรายงาน — ออกแบบมาเพื่อบุคคลธรรมดาและผู้ประกอบการรายย่อยโดยเฉพาะ</p>
+    <div class="hero-actions">
+      <a href="#" class="btn-primary" id="hero-launch">เริ่มใช้งานฟรี →</a>
+      <a href="#features" class="btn-ghost">ดูฟีเจอร์ทั้งหมด</a>
+    </div>
+    <div class="stats">
+      <div><div class="stat-num">8<span class="u">+</span></div><div class="stat-label">โมดูลครบวงจร</div></div>
+      <div><div class="stat-num">26<span class="u"> รายการ</span></div><div class="stat-label">ลดหย่อนครบถ้วน</div></div>
+      <div><div class="stat-num">100<span class="u">%</span></div><div class="stat-label">อ้างอิงกฎหมายจริง</div></div>
+    </div>
+  </header>
+
+  <section class="section" id="features">
+    <div class="sec-head reveal">
+      <div class="sec-tag">ความสามารถ</div>
+      <h2>ทุกอย่างที่คนทำธุรกิจต้องการ</h2>
+    </div>
+    <div class="grid">
+      <div class="card reveal"><div class="card-ico">📒</div><h3>บันทึกบัญชีอัจฉริยะ</h3><p>บันทึกรายรับรายจ่าย ติ๊กประเภทเงินได้ตามมาตรา 40 ระบบจัดให้อัตโนมัติ</p></div>
+      <div class="card reveal"><div class="card-ico">🧮</div><h3>คำนวณภาษีแม่นยำ</h3><p>คำนวณภาษีเงินได้ตามขั้นบันได พร้อมลดหย่อนครบ 26 รายการ ไม่มีมั่ว</p></div>
+      <div class="card reveal"><div class="card-ico">📅</div><h3>ภาษีครึ่งปี & VAT</h3><p>รองรับ ภ.ง.ด.94, ภ.พ.30 และภาษีหัก ณ ที่จ่าย พร้อมตัวอย่างการกรอกแบบ</p></div>
+      <div class="card reveal"><div class="card-ico">📦</div><h3>ต้นทุนสินค้า</h3><p>คำนวณต้นทุนแบบ FIFO และถัวเฉลี่ยถ่วงน้ำหนัก ตามมาตรฐาน TAS 2</p></div>
+      <div class="card reveal"><div class="card-ico">📊</div><h3>วิเคราะห์ & รายงาน</h3><p>ดูสรุปรายเดือน-รายปี ส่งออกเป็น Excel, CSV และ PDF ได้ทันที</p></div>
+      <div class="card reveal"><div class="card-ico">🔮</div><h3>วางแผนการเงิน</h3><p>คาดการณ์รายได้และภาษีสิ้นปีจากข้อมูลจริง พร้อมคำแนะนำการประหยัดภาษี</p></div>
+    </div>
+  </section>
+
+  <div class="cta-band reveal">
+    <h2>พร้อมจัดการภาษีแบบมือโปร?</h2>
+    <p>เริ่มใช้งานได้เลย ไม่มีค่าใช้จ่าย</p>
+    <a href="#" class="btn-primary" id="cta-launch">เข้าสู่ TaxSmart →</a>
+  </div>
+
+  <footer id="contact">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <div class="logo"><span class="logo-mark">฿</span> TaxSmart</div>
+        <p>แพลตฟอร์มบัญชี-ภาษี-วางแผนการเงิน สำหรับบุคคลธรรมดาและผู้ประกอบการไทย</p>
+      </div>
+      <div class="contact-list">
+        <div class="contact-title">ติดต่อ / แจ้งปัญหา</div>
+        <a class="contact-item" href="https://www.facebook.com/siriwat.khotphat.2024/?locale=th_TH" target="_blank"><span class="ci-ico">f</span> Facebook: Siriwat Khotphat</a>
+        <a class="contact-item" href="https://line.me/ti/p/~0610950531" target="_blank"><span class="ci-ico">L</span> LINE ID: 0610950531</a>
+        <a class="contact-item" href="tel:0986673680"><span class="ci-ico">☎</span> โทร: 098-667-3680</a>
+      </div>
+    </div>
+    <div class="copyright">© 2569 TaxSmart · ผลการคำนวณเป็นการประมาณการเบื้องต้น ควรตรวจสอบกับกรมสรรพากรก่อนยื่นจริง</div>
+  </footer>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+  // ===== ตั้งค่า URL ของแอป Streamlit (แก้ตรงนี้หลัง deploy) =====
+  var APP_URL = "http://localhost:8501";
+  ["nav-launch","hero-launch","cta-launch"].forEach(function(id){
+    var el = document.getElementById(id);
+    if(el) el.addEventListener("click", function(e){ e.preventDefault(); window.location.href = APP_URL; });
+  });
+
+  // ===== 3D background: ทรงเรขาคณิตลอยหมุน (particle field + wireframe) =====
+  var scene = new THREE.Scene();
+  var camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 1000);
+  camera.position.z = 30;
+  var renderer = new THREE.WebGLRenderer({canvas:document.getElementById("bg-canvas"), antialias:true, alpha:true});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  // particle field
+  var pGeo = new THREE.BufferGeometry();
+  var count = 1400;
+  var pos = new Float32Array(count*3);
+  for(var i=0;i<count*3;i++){ pos[i] = (Math.random()-0.5)*120; }
+  pGeo.setAttribute("position", new THREE.BufferAttribute(pos,3));
+  var pMat = new THREE.PointsMaterial({size:0.35, color:0x7F77DD, transparent:true, opacity:0.7});
+  var points = new THREE.Points(pGeo, pMat);
+  scene.add(points);
+
+  // wireframe icosahedrons (ลูกเล่นทรงเทค)
+  var shapes = [];
+  function addShape(x,y,z,r,color){
+    var geo = new THREE.IcosahedronGeometry(r,0);
+    var mat = new THREE.MeshBasicMaterial({color:color, wireframe:true, transparent:true, opacity:0.5});
+    var m = new THREE.Mesh(geo, mat);
+    m.position.set(x,y,z);
+    scene.add(m); shapes.push(m);
+  }
+  addShape(-18,8,-5,6,0x7F77DD);
+  addShape(20,-10,-8,8,0x1D9E75);
+  addShape(14,14,-12,4,0x5DCAA5);
+
+  var mouseX=0, mouseY=0;
+  document.addEventListener("mousemove", function(e){
+    mouseX = (e.clientX/window.innerWidth-0.5);
+    mouseY = (e.clientY/window.innerHeight-0.5);
+  });
+
+  function animate(){
+    requestAnimationFrame(animate);
+    points.rotation.y += 0.0006;
+    points.rotation.x += 0.0002;
+    shapes.forEach(function(s,i){
+      s.rotation.x += 0.002+i*0.0005;
+      s.rotation.y += 0.003+i*0.0004;
+    });
+    camera.position.x += (mouseX*8 - camera.position.x)*0.04;
+    camera.position.y += (-mouseY*8 - camera.position.y)*0.04;
+    camera.lookAt(scene.position);
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  window.addEventListener("resize", function(){
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // ===== scroll reveal =====
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){ if(en.isIntersecting) en.target.classList.add("show"); });
+  },{threshold:0.15});
+  document.querySelectorAll(".reveal").forEach(function(el){ io.observe(el); });
+</script>
+</body>
+</html>
