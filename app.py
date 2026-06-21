@@ -380,8 +380,10 @@ with st.sidebar:
             else:
                 st.error("กรุณาพิมพ์รายละเอียดก่อนส่ง")
     st.divider()
-    st.caption("📧 อีเมลผู้ดูแล: your-email@example.com")
-    st.caption("(เปลี่ยนเป็นอีเมลจริงของคุณในโค้ด)")
+    st.markdown("**ช่องทางติดต่อ**")
+    st.markdown("[💬 Facebook: Siriwat Khotphat](https://www.facebook.com/siriwat.khotphat.2024/?locale=th_TH)")
+    st.caption("📱 LINE ID: 0610950531")
+    st.caption("☎️ โทร: 098-667-3680")
 
 tab1, tab2, tab6, tab7, tab8, tab9, tab3, tab4, tab5 = st.tabs([
     "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "📅 ภาษีครึ่งปี (ภ.ง.ด.94)",
