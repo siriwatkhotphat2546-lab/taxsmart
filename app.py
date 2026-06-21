@@ -112,9 +112,32 @@ hr{border-color:var(--line) !important;}
 .stTextInput input, .stNumberInput input, .stDateInput input,
 .stTextArea textarea{
   color:var(--paper) !important;
+  background:var(--slate) !important;
+}
+/* พื้นหลังช่องกรอกทั้งหมดให้เข้มเข้าธีม (กันพื้นขาว ตัวขาว) */
+.stTextInput>div>div, .stNumberInput>div>div, .stDateInput>div>div,
+.stTextArea>div>div, [data-baseweb="input"], [data-baseweb="textarea"]{
+  background:var(--slate) !important;
+  border:1px solid var(--line) !important;
+}
+/* selectbox พื้นเข้ม */
+[data-baseweb="select"]>div{
+  background:var(--slate) !important;
+  border:1px solid var(--line) !important;
 }
 /* dropdown selectbox text */
 [data-baseweb="select"]{color:var(--paper) !important;}
+/* ปุ่ม +/- ของ number_input ให้เข้ากับพื้นเข้ม */
+.stNumberInput button{
+  background:var(--slate) !important;
+  color:var(--paper) !important;
+  border:1px solid var(--line) !important;
+}
+/* เมนู dropdown ที่เปิดออกมา (ตัวเลือก) พื้นเข้ม ตัวสว่าง */
+[data-baseweb="popover"] *, [data-baseweb="menu"] *{
+  background:var(--slate) !important;
+  color:var(--paper) !important;
+}
 /* ตาราง dataframe ข้อความ */
 [data-testid="stDataFrame"] *{color:var(--paper);}
 </style>
