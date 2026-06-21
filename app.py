@@ -6,6 +6,81 @@ import io
 
 st.set_page_config(page_title="TaxSmart", page_icon="💰", layout="wide")
 
+# ===== Modern Slate — CSS แต่งเพิ่มให้เข้าธีม landing =====
+st.markdown("""
+<style>
+:root{
+  --violet:#7F77DD; --violet-deep:#534AB7; --mint:#1D9E75;
+  --mint-soft:#5DCAA5; --ink:#0B0A1F; --slate:#16142E;
+  --paper:#F4F3FB; --muted:#A8A4C8; --line:rgba(255,255,255,0.08);
+}
+/* พื้นหลังไล่เฉดนุ่มๆ */
+.stApp{
+  background:
+    radial-gradient(1100px 700px at 15% -5%, rgba(127,119,221,0.12), transparent 55%),
+    radial-gradient(900px 600px at 95% 0%, rgba(29,158,117,0.10), transparent 55%),
+    var(--ink);
+}
+/* หัวข้อใหญ่ไล่เฉดม่วง-เขียว */
+h1{
+  font-weight:800 !important; letter-spacing:-0.5px;
+  background:linear-gradient(120deg,#7F77DD 10%,#5DCAA5 90%);
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+}
+h2,h3{color:var(--paper) !important; font-weight:700 !important;}
+/* แท็บ */
+.stTabs [data-baseweb="tab-list"]{gap:4px; border-bottom:1px solid var(--line);}
+.stTabs [data-baseweb="tab"]{
+  border-radius:10px 10px 0 0; padding:8px 14px; color:var(--muted);
+}
+.stTabs [aria-selected="true"]{
+  background:rgba(127,119,221,0.14) !important; color:var(--paper) !important;
+}
+/* การ์ด metric — มุมมน เงานุ่ม ขอบเรืองแสง */
+[data-testid="stMetric"]{
+  background:rgba(255,255,255,0.03);
+  border:1px solid var(--line);
+  border-radius:16px; padding:16px 18px;
+  transition:transform .2s, border-color .2s;
+}
+[data-testid="stMetric"]:hover{
+  transform:translateY(-3px); border-color:rgba(127,119,221,0.4);
+}
+[data-testid="stMetricValue"]{
+  font-weight:800 !important;
+  background:linear-gradient(120deg,#7F77DD,#5DCAA5);
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+}
+/* ปุ่ม */
+.stButton>button, .stDownloadButton>button, .stFormSubmitButton>button{
+  border-radius:12px; font-weight:600; border:1px solid var(--line);
+  background:linear-gradient(135deg,var(--violet),var(--violet-deep));
+  color:#fff; transition:transform .2s, box-shadow .2s;
+}
+.stButton>button:hover, .stDownloadButton>button:hover, .stFormSubmitButton>button:hover{
+  transform:translateY(-2px); box-shadow:0 8px 24px rgba(83,74,183,0.4);
+  border-color:transparent; color:#fff;
+}
+/* กล่อง input / selectbox มุมมน */
+.stTextInput input, .stNumberInput input, .stDateInput input,
+[data-baseweb="select"]>div{
+  border-radius:10px !important;
+}
+/* expander */
+.streamlit-expanderHeader, [data-testid="stExpander"]{
+  border-radius:12px; border:1px solid var(--line);
+}
+/* ตาราง dataframe มุมมน */
+[data-testid="stDataFrame"]{border-radius:12px; overflow:hidden;}
+/* เส้นคั่น */
+hr{border-color:var(--line) !important;}
+/* sidebar */
+[data-testid="stSidebar"]{
+  background:var(--slate); border-right:1px solid var(--line);
+}
+</style>
+""", unsafe_allow_html=True)
+
 # =====================================================================
 #  ฐานข้อมูลกลาง (Single Source of Truth)
 # =====================================================================
