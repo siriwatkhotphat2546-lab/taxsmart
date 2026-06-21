@@ -78,6 +78,45 @@ hr{border-color:var(--line) !important;}
 [data-testid="stSidebar"]{
   background:var(--slate); border-right:1px solid var(--line);
 }
+/* ===== แก้ปัญหาตัวหนังสือกลืนพื้นหลัง — บังคับให้สว่างพออ่านได้ ===== */
+/* ข้อความทั่วไป ป้ายกำกับ */
+.stApp, .stApp p, .stApp span, .stApp label, .stApp li,
+[data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] *,
+.stMarkdown, .stMarkdown *{
+  color:var(--paper);
+}
+/* caption / ข้อความช่วยเหลือ — สีเทาอ่อนพออ่านได้ */
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] *,
+.stCaption, small{
+  color:var(--muted) !important;
+}
+/* sidebar ทุกข้อความให้สว่าง */
+[data-testid="stSidebar"] *, [data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span, [data-testid="stSidebar"] label{
+  color:var(--paper) !important;
+}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] *{
+  color:var(--mint-soft) !important;
+}
+/* ลิงก์ */
+.stApp a, [data-testid="stSidebar"] a{
+  color:var(--mint-soft) !important; text-decoration:none;
+}
+.stApp a:hover{text-decoration:underline;}
+/* ตัวเลข metric label และ caption ใต้ metric */
+[data-testid="stMetricLabel"], [data-testid="stMetricLabel"] *{
+  color:var(--muted) !important;
+}
+/* ตัวอักษรในช่องกรอก (input) ให้เข้ม อ่านบนพื้นอ่อน */
+.stTextInput input, .stNumberInput input, .stDateInput input,
+.stTextArea textarea{
+  color:var(--paper) !important;
+}
+/* dropdown selectbox text */
+[data-baseweb="select"]{color:var(--paper) !important;}
+/* ตาราง dataframe ข้อความ */
+[data-testid="stDataFrame"] *{color:var(--paper);}
 </style>
 """, unsafe_allow_html=True)
 
