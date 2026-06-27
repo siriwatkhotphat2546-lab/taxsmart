@@ -543,11 +543,111 @@ with st.sidebar:
     st.caption("📱 LINE ID: 0610950531")
     st.caption("☎️ โทร: 098-667-3680")
 
-tab1, tab2, tab6, tab7, tab8, tab9, tab3, tab4, tab5 = st.tabs([
-    "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "📅 ภาษีครึ่งปี (ภ.ง.ด.94)",
+tabD, tab1, tab2, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5 = st.tabs([
+    "🏠 ภาพรวม (Dashboard)", "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "📅 ภาษีครึ่งปี (ภ.ง.ด.94)",
     "🧾 VAT (ภ.พ.30)", "✂️ หัก ณ ที่จ่าย", "📦 ต้นทุนสินค้า",
-    "📊 วิเคราะห์รายเดือน-ปี", "🔮 วางแผนการเงิน", "📖 คลังกฎหมายภาษี"
+    "💲 คำนวณราคาขาย", "📊 วิเคราะห์รายเดือน-ปี", "🔮 วางแผนการเงิน", "📖 คลังกฎหมายภาษี"
 ])
+
+# =====================================================================
+#  TAB DASHBOARD — ภาพรวมสุขภาพการเงิน
+# =====================================================================
+with tabD:
+    st.subheader("🏠 ภาพรวมสุขภาพการเงินของคุณ")
+    conn = get_conn()
+    df_d = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
+    conn.close()
+
+    if df_d.empty:
+        st.info("ยังไม่มีข้อมูล — เริ่มบันทึกรายรับรายจ่ายที่แท็บ 'บันทึกบัญชี' แล้วกลับมาดูภาพรวมที่นี่")
+    else:
+        df_d["txn_date"] = pd.to_datetime(df_d["txn_date"], errors="coerce")
+        income = df_d[df_d.txn_type=="รายรับ"].amount.sum()
+        expense = df_d[df_d.txn_type=="รายจ่าย"].amount.sum()
+        profit = income - expense
+
+        # ===== คะแนนสุขภาพการเงิน (0-100) =====
+        # อิงอัตรากำไร (profit margin) เป็นหลัก
+        if income > 0:
+            margin = profit / income
+            if margin >= 0.3: score, grade, color = 90, "ดีเยี่ยม", "🟢"
+            elif margin >= 0.15: score, grade, color = 75, "ดี", "🟢"
+            elif margin >= 0.05: score, grade, color = 60, "พอใช้", "🟡"
+            elif margin >= 0: score, grade, color = 45, "ต้องระวัง", "🟡"
+            else: score, grade, color = 25, "เสี่ยง", "🔴"
+        else:
+            score, grade, color, margin = 0, "ยังไม่มีรายรับ", "⚪", 0
+
+        # ===== แถวคะแนน + ตัวเลขหลัก =====
+        st.markdown("##### 💯 คะแนนสุขภาพการเงิน")
+        sc1, sc2, sc3, sc4 = st.columns(4)
+        sc1.metric("คะแนนรวม", f"{score}/100", grade)
+        sc2.metric("💚 รายรับรวม", f"{income:,.0f}")
+        sc3.metric("💸 รายจ่ายรวม", f"{expense:,.0f}")
+        sc4.metric("📊 กำไรสุทธิ", f"{profit:,.0f}", f"{margin*100:.0f}% ของรายรับ")
+
+        # progress bar คะแนน
+        st.progress(score/100)
+        st.caption(f"{color} สุขภาพการเงินระดับ: {grade} — คะแนนคำนวณจากอัตรากำไรเทียบกับรายรับ")
+
+        st.divider()
+
+        # ===== กราฟรายรับ-รายจ่ายรายเดือน =====
+        cL, cR = st.columns(2)
+        with cL:
+            st.markdown("##### 📈 รายรับ-รายจ่ายรายเดือน")
+            df_d["เดือน"] = df_d["txn_date"].dt.to_period("M").astype(str)
+            monthly = df_d.pivot_table(index="เดือน", columns="txn_type",
+                                       values="amount", aggfunc="sum", fill_value=0)
+            for c in ["รายรับ","รายจ่าย"]:
+                if c not in monthly.columns:
+                    monthly[c] = 0
+            st.bar_chart(monthly[["รายรับ","รายจ่าย"]])
+
+        with cR:
+            st.markdown("##### 🍩 หมวดค่าใช้จ่ายสูงสุด")
+            exp_df = df_d[df_d.txn_type=="รายจ่าย"]
+            if exp_df.empty:
+                st.info("ยังไม่มีรายจ่าย")
+            else:
+                by_cat = exp_df.groupby("category")["amount"].sum().sort_values(ascending=False)
+                st.bar_chart(by_cat)
+                top_cat = by_cat.index[0]
+                top_amt = by_cat.iloc[0]
+                st.caption(f"💡 หมวดที่จ่ายมากสุด: **{top_cat}** ({top_amt:,.0f} บาท = {top_amt/expense*100:.0f}% ของรายจ่าย)")
+
+        st.divider()
+
+        # ===== คำแนะนำอัตโนมัติ =====
+        st.markdown("##### 💡 คำแนะนำสำหรับคุณ")
+        tips = []
+        if margin < 0:
+            tips.append("🔴 ตอนนี้รายจ่ายมากกว่ารายรับ — ควรหาทางลดค่าใช้จ่ายหรือเพิ่มรายได้ด่วน")
+        elif margin < 0.05:
+            tips.append("🟡 กำไรบางมาก (ต่ำกว่า 5%) — ลองทบทวนต้นทุนและราคาขาย")
+        else:
+            tips.append(f"🟢 อัตรากำไร {margin*100:.0f}% อยู่ในเกณฑ์ดี รักษาระดับนี้ไว้")
+
+        if not exp_df.empty:
+            top_cat = exp_df.groupby("category")["amount"].sum().idxmax()
+            top_pct = exp_df.groupby("category")["amount"].sum().max()/expense*100
+            if top_pct > 50:
+                tips.append(f"⚠️ ค่าใช้จ่ายกระจุกที่ '{top_cat}' มากถึง {top_pct:.0f}% — ลองหาทางกระจายหรือลดส่วนนี้")
+
+        if income > 1_800_000:
+            tips.append("📌 รายรับเกิน 1.8 ล้าน/ปี — อย่าลืมเรื่องจดทะเบียน VAT")
+
+        n_months = df_d["เดือน"].nunique()
+        if n_months >= 2:
+            avg_profit = profit / n_months
+            tips.append(f"📅 เฉลี่ยกำไรเดือนละ {avg_profit:,.0f} บาท — ถ้าเก็บ 6 เดือนจะมีเงินสำรองราว {avg_profit*6:,.0f} บาท")
+
+        for t in tips:
+            st.markdown(f"- {t}")
+
+        st.caption("⚠️ คะแนนและคำแนะนำเป็นแนวทางเบื้องต้นจากข้อมูลที่บันทึก ไม่ใช่คำแนะนำทางการเงินอย่างเป็นทางการ")
+
+
 
 # =====================================================================
 #  TAB 1 — บันทึกบัญชี (มีติ๊กเลือกประเภทเงินได้)
@@ -1304,6 +1404,96 @@ with tab9:
 
         st.info("💡 FIFO เหมาะกับสินค้าที่มีวันหมดอายุ (ขายของเก่าก่อน) | Weighted Average เหมาะกับสินค้าที่คละกันได้ เช่น วัตถุดิบ")
         st.caption("⚠️ ตาม TAS 2 ใช้ได้ทั้ง FIFO และ Weighted Average (ห้ามใช้ LIFO) ควรใช้วิธีเดียวสม่ำเสมอตามมาตรา TAS 8")
+
+# =====================================================================
+#  TAB 10 — คำนวณราคาขาย + เทียบราคา (ช่วยพ่อค้าแม่ค้าตั้งราคา)
+# =====================================================================
+with tab10:
+    st.subheader("💲 คำนวณราคาขายและเทียบราคา")
+    st.caption("ใส่ต้นทุน แล้วระบบช่วยตั้งราคาขายตามกำไรที่ต้องการ + เทียบหลายวิธีให้ตัดสินใจ")
+
+    st.markdown("##### 📥 ใส่ข้อมูลต้นทุน")
+    pc1, pc2 = st.columns(2)
+    with pc1:
+        product_name = st.text_input("ชื่อสินค้า (ไม่บังคับ)", placeholder="เช่น เสื้อยืด")
+        cost = st.number_input("ต้นทุนสินค้า/หน่วย (บาท)", min_value=0.0, step=10.0, format="%.2f")
+        other_cost = st.number_input("ต้นทุนแฝงต่อหน่วย (ค่าส่ง/แพ็ค/ค่าธรรมเนียม)", min_value=0.0, step=5.0, format="%.2f",
+                                     help="ค่าใช้จ่ายอื่นต่อชิ้น เช่น ค่ากล่อง ค่าส่ง ค่าธรรมเนียมแพลตฟอร์ม")
+    with pc2:
+        target_margin = st.slider("กำไรที่ต้องการ (% ของราคาขาย)", 0, 90, 30,
+                                  help="กำไรขั้นต้นคิดเป็น % ของราคาขาย")
+        vat_included = st.checkbox("บวก VAT 7% ในราคาขาย", value=False)
+
+    total_cost = cost + other_cost
+
+    if total_cost <= 0:
+        st.info("กรอกต้นทุนสินค้าก่อน เพื่อให้ระบบคำนวณราคาขายแนะนำ")
+    else:
+        # ===== วิธีที่ 1: ตั้งราคาจาก % กำไรของราคาขาย (margin) =====
+        # ราคาขาย = ต้นทุน / (1 - margin%)
+        if target_margin < 100:
+            price_margin = total_cost / (1 - target_margin/100)
+        else:
+            price_margin = total_cost
+
+        # ===== วิธีที่ 2: ตั้งราคาจาก % บวกเพิ่มจากต้นทุน (markup) =====
+        # ใช้ markup เท่ากับ target ที่ผู้ใช้ตั้ง เพื่อเทียบให้เห็นต่าง
+        price_markup = total_cost * (1 + target_margin/100)
+
+        # ===== วิธีที่ 3: ราคาที่นิยม (ลงท้าย 9) =====
+        import math
+        price_psych = math.ceil(price_margin/10)*10 - 1
+        if price_psych < total_cost:
+            price_psych = math.ceil(price_margin)
+
+        def add_vat(p):
+            return p * 1.07 if vat_included else p
+
+        rows = []
+        for name, p, desc in [
+            ("ตั้งจากกำไร % ของราคาขาย (Margin)", price_margin, f"กำไร {target_margin}% ของราคาขาย"),
+            ("ตั้งจากบวกเพิ่มจากต้นทุน (Markup)", price_markup, f"บวก {target_margin}% จากต้นทุน"),
+            ("ราคาจูงใจ (ลงท้าย 9)", add_vat(price_psych)/1.07 if vat_included else price_psych, "ปัดให้ลงท้าย 9 ดึงดูดลูกค้า"),
+        ]:
+            final_price = add_vat(p)
+            profit = final_price/(1.07 if vat_included else 1) - total_cost
+            margin_pct = (profit / (final_price/(1.07 if vat_included else 1))) * 100 if final_price > 0 else 0
+            rows.append({
+                "วิธีตั้งราคา": name,
+                "ราคาขาย (บาท)": f"{final_price:,.2f}",
+                "กำไร/ชิ้น (บาท)": f"{profit:,.2f}",
+                "อัตรากำไร": f"{margin_pct:.1f}%",
+                "หมายเหตุ": desc,
+            })
+
+        st.divider()
+        st.markdown(f"##### 📊 ราคาขายแนะนำ" + (f" — {product_name}" if product_name else ""))
+        m1, m2, m3 = st.columns(3)
+        m1.metric("ต้นทุนรวม/ชิ้น", f"{total_cost:,.2f}")
+        m2.metric("ราคาขายแนะนำ", f"{add_vat(price_margin):,.2f}")
+        m3.metric("กำไร/ชิ้น", f"{add_vat(price_margin)/(1.07 if vat_included else 1) - total_cost:,.2f}")
+
+        st.markdown("##### 🔍 เทียบหลายวิธีตั้งราคา")
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        # จุดคุ้มทุน
+        st.divider()
+        st.markdown("##### 🎯 วิเคราะห์เพิ่มเติม")
+        bep1, bep2 = st.columns(2)
+        with bep1:
+            fixed_cost = st.number_input("ค่าใช้จ่ายคงที่ต่อเดือน (ค่าเช่า/เงินเดือน)", min_value=0.0, step=500.0, format="%.2f",
+                                         help="ใส่เพื่อคำนวณว่าต้องขายกี่ชิ้นถึงคุ้มทุน")
+        with bep2:
+            if fixed_cost > 0:
+                profit_per_unit = add_vat(price_margin)/(1.07 if vat_included else 1) - total_cost
+                if profit_per_unit > 0:
+                    bep_units = fixed_cost / profit_per_unit
+                    st.metric("ต้องขายกี่ชิ้น/เดือนถึงคุ้มทุน", f"{bep_units:,.0f} ชิ้น")
+                else:
+                    st.warning("กำไรต่อชิ้นเป็น 0 หรือติดลบ — ตั้งราคาใหม่")
+
+        st.info("💡 Margin (กำไรจากราคาขาย) กับ Markup (บวกจากต้นทุน) ต่างกัน! เช่น ต้นทุน 100 บวก markup 30% = ขาย 130 แต่กำไรจริงแค่ 23% ของราคาขาย ระบบคำนวณให้เห็นชัดทั้งสองแบบ")
+        st.caption("⚠️ ราคาแนะนำเป็นแนวทาง ควรพิจารณาราคาตลาดและคู่แข่งประกอบ")
 
 # =====================================================================
 #  TAB 5 — คลังกฎหมายภาษี
