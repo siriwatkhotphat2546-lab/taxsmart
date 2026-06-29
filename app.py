@@ -543,9 +543,9 @@ with st.sidebar:
     st.caption("📱 LINE ID: 0610950531")
     st.caption("☎️ โทร: 098-667-3680")
 
-tabD, tab1, tab2, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5 = st.tabs([
-    "🏠 ภาพรวม (Dashboard)", "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "📅 ภาษีครึ่งปี (ภ.ง.ด.94)",
-    "🧾 VAT (ภ.พ.30)", "✂️ หัก ณ ที่จ่าย", "📦 ต้นทุนสินค้า",
+tabD, tab1, tab2, tabShop, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5 = st.tabs([
+    "🏠 ภาพรวม (Dashboard)", "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "🏪 ร้านค้า/ร้านอาหาร",
+    "📅 ภาษีครึ่งปี (ภ.ง.ด.94)", "🧾 VAT (ภ.พ.30)", "✂️ หัก ณ ที่จ่าย", "📦 ต้นทุนสินค้า",
     "💲 คำนวณราคาขาย", "📊 วิเคราะห์รายเดือน-ปี", "🔮 วางแผนการเงิน", "📖 คลังกฎหมายภาษี"
 ])
 
@@ -1494,6 +1494,135 @@ with tab10:
 
         st.info("💡 Margin (กำไรจากราคาขาย) กับ Markup (บวกจากต้นทุน) ต่างกัน! เช่น ต้นทุน 100 บวก markup 30% = ขาย 130 แต่กำไรจริงแค่ 23% ของราคาขาย ระบบคำนวณให้เห็นชัดทั้งสองแบบ")
         st.caption("⚠️ ราคาแนะนำเป็นแนวทาง ควรพิจารณาราคาตลาดและคู่แข่งประกอบ")
+
+# =====================================================================
+#  TAB ร้านค้า/ร้านอาหาร — คำนวณภาษีเฉพาะร้านค้า (เทียบวิธีหัก + เทียบ 2 วิธีภาษี)
+# =====================================================================
+with tabShop:
+    st.subheader("🏪 คำนวณภาษีสำหรับร้านค้า/ร้านอาหาร (บุคคลธรรมดา)")
+    st.caption("ออกแบบเฉพาะร้านค้า — รวมรายได้ทุกช่องทาง เทียบวิธีหักค่าใช้จ่าย และเทียบ 2 วิธีคำนวณภาษีตามกฎหมาย")
+
+    # ---------- ขั้น 1: รวมรายได้ทุกช่องทาง ----------
+    st.markdown("##### 📥 ขั้นที่ 1 — รายได้ทั้งปี (รวมทุกช่องทาง)")
+    st.info("⚠️ สำคัญ: ยอดจากแอป Delivery ให้ใส่**ยอดขายเต็มก่อนหักค่า GP** ไม่ใช่ยอดที่โอนเข้าบัญชี")
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        rev_cash = st.number_input("เงินสดหน้าร้าน (บาท/ปี)", min_value=0.0, step=1000.0, format="%.2f")
+        rev_transfer = st.number_input("เงินโอน/PromptPay (บาท/ปี)", min_value=0.0, step=1000.0, format="%.2f")
+        rev_gov = st.number_input("โครงการรัฐ เช่น คนละครึ่ง (บาท/ปี)", min_value=0.0, step=1000.0, format="%.2f")
+    with sc2:
+        rev_delivery = st.number_input("ยอดขายผ่านแอป Delivery — ยอดเต็มก่อนหัก GP (บาท/ปี)", min_value=0.0, step=1000.0, format="%.2f")
+        gp_rate = st.slider("ค่า GP ที่แอปหัก (%)", 0, 40, 30, help="เช่น Grab/LINEMAN หักประมาณ 30% — ใช้คำนวณต้นทุนกรณีหักตามจริง")
+
+    total_revenue = rev_cash + rev_transfer + rev_gov + rev_delivery
+
+    if total_revenue <= 0:
+        st.info("กรอกรายได้อย่างน้อย 1 ช่องทางเพื่อเริ่มคำนวณ")
+    else:
+        st.metric("💰 รายได้รวมทั้งปี (ฐานภาษี)", f"{total_revenue:,.2f} บาท")
+
+        # ---------- ขั้น 2: เทียบวิธีหักค่าใช้จ่าย ----------
+        st.divider()
+        st.markdown("##### 📊 ขั้นที่ 2 — เทียบวิธีหักค่าใช้จ่าย")
+
+        # วิธี A: หักเหมา 60%
+        expense_flat = total_revenue * 0.60
+
+        # วิธี B: หักตามจริง (ผู้ใช้กรอก + ค่า GP คำนวณให้)
+        st.markdown("**กรอกต้นทุนจริง (ถ้าจะเทียบวิธีหักตามจริง):**")
+        rc1, rc2, rc3 = st.columns(3)
+        with rc1:
+            cost_material = st.number_input("ค่าวัตถุดิบ/ปี", min_value=0.0, step=1000.0, format="%.2f")
+        with rc2:
+            cost_rent = st.number_input("ค่าเช่า+ค่าจ้าง/ปี", min_value=0.0, step=1000.0, format="%.2f")
+        with rc3:
+            cost_other = st.number_input("ค่าใช้จ่ายอื่น/ปี", min_value=0.0, step=1000.0, format="%.2f")
+        gp_cost = rev_delivery * (gp_rate/100)
+        expense_real = cost_material + cost_rent + cost_other + gp_cost
+
+        cmp_exp = pd.DataFrame({
+            "วิธีหักค่าใช้จ่าย": ["หักเหมา 60%", "หักตามจริง"],
+            "ค่าใช้จ่ายที่หักได้ (บาท)": [f"{expense_flat:,.2f}", f"{expense_real:,.2f}"],
+            "หมายเหตุ": [
+                "ไม่ต้องมีใบเสร็จ",
+                f"รวมค่า GP {gp_cost:,.0f} (ต้องมีใบเสร็จครบ)",
+            ],
+        })
+        st.dataframe(cmp_exp, use_container_width=True, hide_index=True)
+
+        # เลือกวิธีหักที่ได้ค่าใช้จ่ายสูงกว่า (เสียภาษีน้อยกว่า)
+        if expense_real > expense_flat:
+            best_expense = expense_real
+            best_exp_method = "หักตามจริง"
+            st.success(f"✅ แนะนำ: หักตามจริง ({expense_real:,.0f}) มากกว่าเหมา 60% ({expense_flat:,.0f}) → เสียภาษีน้อยกว่า")
+        else:
+            best_expense = expense_flat
+            best_exp_method = "หักเหมา 60%"
+            st.success(f"✅ แนะนำ: หักเหมา 60% ({expense_flat:,.0f}) มากกว่าหรือเท่ากับตามจริง ({expense_real:,.0f}) → ง่ายและคุ้มกว่า")
+
+        # ---------- ค่าลดหย่อน ----------
+        st.divider()
+        st.markdown("##### 📋 ค่าลดหย่อน")
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            st.text("ลดหย่อนส่วนตัว: 60,000 (อัตโนมัติ)")
+            shop_spouse = st.checkbox("คู่สมรสไม่มีเงินได้ (+60,000)", key="shop_spouse")
+            shop_children = st.number_input("บุตร (คนละ 30,000)", 0, 15, 0, key="shop_child")
+        with dc2:
+            shop_social = st.number_input("ประกันสังคม (สูงสุด 9,000)", 0.0, 9_000.0, 0.0, step=100.0, key="shop_social")
+            shop_other_ded = st.number_input("ลดหย่อนอื่นๆ (ประกัน/กองทุน/บริจาค)", 0.0, 700_000.0, 0.0, step=1000.0, key="shop_other_ded")
+        deduction = 60_000 + (60_000 if shop_spouse else 0) + shop_children*30_000 + shop_social + shop_other_ded
+
+        # ---------- ขั้น 3: เทียบ 2 วิธีคำนวณภาษี ----------
+        st.divider()
+        st.markdown("##### 🧮 ขั้นที่ 3 — เทียบ 2 วิธีคำนวณภาษี (จ่ายตัวที่สูงกว่า)")
+
+        # วิธีที่ 1: เงินได้สุทธิ × ขั้นบันได
+        net_income = max(0.0, total_revenue - best_expense - deduction)
+        tax_method1, _ = calc_progressive_tax(net_income)
+
+        # วิธีที่ 2: รายได้รวม × 0.5% (เฉพาะถ้ารายได้ที่ไม่ใช่เงินเดือนเกิน 1 ล้าน)
+        if total_revenue > 1_000_000:
+            tax_method2 = total_revenue * 0.005
+            method2_active = True
+        else:
+            tax_method2 = 0
+            method2_active = False
+
+        final_tax = max(tax_method1, tax_method2)
+
+        cmp_tax = pd.DataFrame({
+            "วิธีคำนวณภาษี": [
+                "วิธีที่ 1: เงินได้สุทธิ × ขั้นบันได",
+                "วิธีที่ 2: รายได้รวม × 0.5%",
+            ],
+            "ภาษี (บาท)": [f"{tax_method1:,.2f}", f"{tax_method2:,.2f}" if method2_active else "ไม่เข้าเงื่อนไข"],
+            "หมายเหตุ": [
+                f"เงินได้สุทธิ {net_income:,.0f}",
+                "ใช้เมื่อรายได้เกิน 1 ล้าน/ปี" if method2_active else "รายได้ไม่ถึง 1 ล้าน",
+            ],
+        })
+        st.dataframe(cmp_tax, use_container_width=True, hide_index=True)
+
+        # ---------- ผลลัพธ์ ----------
+        st.divider()
+        rm1, rm2, rm3 = st.columns(3)
+        rm1.metric("วิธีหักที่เลือก", best_exp_method)
+        rm2.metric("เงินได้สุทธิ", f"{net_income:,.0f}")
+        rm3.metric("ภาษีที่ต้องจ่ายจริง", f"{final_tax:,.2f}")
+
+        if method2_active and tax_method2 > tax_method1:
+            st.warning(f"📌 ภาษีวิธีที่ 2 (0.5% = {tax_method2:,.0f}) สูงกว่าวิธีที่ 1 ({tax_method1:,.0f}) → ต้องจ่ายตามวิธีที่ 2 ตามกฎหมาย")
+        else:
+            st.info(f"📌 ภาษีวิธีที่ 1 (ขั้นบันได) สูงกว่าหรือเท่ากับวิธีที่ 2 → จ่ายตามวิธีที่ 1")
+
+        st.success(f"### 💸 ภาษีที่ต้องจ่ายโดยประมาณ: {final_tax:,.2f} บาท")
+
+        # เตือน VAT
+        if total_revenue > 1_800_000:
+            st.error(f"🚨 รายได้ {total_revenue:,.0f} เกิน 1.8 ล้าน/ปี — ต้องจดทะเบียน VAT! เมื่อจดแล้วต้องแยกยอดขายกับ VAT 7% ที่เก็บจากลูกค้า ระวังกำไรลดลงถ้าไม่บวกราคาเพิ่ม")
+
+        st.caption("⚠️ ประมาณการตามอัตราปีภาษี 2568-2569 | รายได้ต้องใช้ยอดเต็มก่อนหัก GP | ควรเก็บหลักฐานครบถ้วนหากหักตามจริง | ตรวจสอบกับกรมสรรพากรก่อนยื่นจริง")
 
 # =====================================================================
 #  TAB 5 — คลังกฎหมายภาษี
