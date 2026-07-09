@@ -215,6 +215,17 @@ def get_conn():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # ตารางคำขอปรึกษาผู้เชี่ยวชาญ
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS consult_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            service TEXT,
+            contact TEXT,
+            detail TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     return conn
 
@@ -509,6 +520,44 @@ if not st.session_state.user_id:
 
 USER = st.session_state.user_id
 
+# ===== หน้าต้อนรับ + คู่มือ (แสดงครั้งแรกหลังเข้าใช้) =====
+if not st.session_state.get("seen_welcome"):
+    st.title(f"👋 ยินดีต้อนรับสู่ TaxSmart, คุณ {USER}")
+    st.markdown("#### แพลตฟอร์มบัญชี-ภาษี-วางแผนการเงิน ครบจบในที่เดียว")
+    st.markdown("""
+    **เริ่มต้นใช้งานง่ายๆ 3 ขั้น:**
+
+    1. **📒 บันทึกบัญชี** — บันทึกรายรับรายจ่าย ติ๊กประเภทเงินได้ (เงินเดือน/ค้าขาย/ฯลฯ)
+    2. **🧮 คำนวณภาษี** — ระบบคำนวณภาษีให้อัตโนมัติตามที่บันทึก พร้อมลดหย่อนครบ 26 รายการ
+    3. **🏠 ภาพรวม** — ดูสุขภาพการเงิน กราฟ และคำแนะนำ
+    """)
+
+    st.markdown("**เลือกว่าคุณเป็นแบบไหน? (ระบบจะแนะนำโมดูลที่เหมาะกับคุณ)**")
+    wc1, wc2, wc3 = st.columns(3)
+    with wc1:
+        if st.button("🧑 บุคคลทั่วไป/มนุษย์เงินเดือน", use_container_width=True):
+            st.session_state.user_type = "บุคคลทั่วไป"
+            st.session_state.seen_welcome = True
+            st.rerun()
+    with wc2:
+        if st.button("🏪 ร้านค้า/ร้านอาหาร", use_container_width=True):
+            st.session_state.user_type = "ร้านค้า"
+            st.session_state.seen_welcome = True
+            st.rerun()
+    with wc3:
+        if st.button("💼 ฟรีแลนซ์/รับจ้างอิสระ", use_container_width=True):
+            st.session_state.user_type = "ฟรีแลนซ์"
+            st.session_state.seen_welcome = True
+            st.rerun()
+
+    st.divider()
+    if st.button("ข้ามไปเลย →"):
+        st.session_state.user_type = "ทั่วไป"
+        st.session_state.seen_welcome = True
+        st.rerun()
+    st.caption("💡 ผลการคำนวณเป็นการประมาณการเบื้องต้น ควรตรวจสอบกับกรมสรรพากรหรือผู้เชี่ยวชาญก่อนยื่นจริง")
+    st.stop()
+
 col_t, col_u = st.columns([4, 1])
 with col_t:
     st.title("💰 TaxSmart")
@@ -518,6 +567,16 @@ with col_u:
     if st.button("ออกจากระบบ"):
         st.session_state.user_id = None
         st.rerun()
+
+# ===== แบนเนอร์แนะนำโมดูลตามประเภทผู้ใช้ =====
+_utype = st.session_state.get("user_type", "ทั่วไป")
+_rec = {
+    "บุคคลทั่วไป": "🧑 สำหรับคุณ: เริ่มที่ **📒 บันทึกบัญชี** → **🧮 คำนวณภาษี** เพื่อดูภาษีเงินเดือนของคุณ พร้อมลดหย่อน",
+    "ร้านค้า": "🏪 สำหรับร้านค้า: ลองใช้ **🏪 ร้านค้า/ร้านอาหาร** ที่เทียบวิธีหักค่าใช้จ่ายและคำนวณภาษีให้ครบ + **💲 คำนวณราคาขาย**",
+    "ฟรีแลนซ์": "💼 สำหรับฟรีแลนซ์: เริ่มที่ **📒 บันทึกบัญชี** (เลือกเงินได้ ม.40(2)) → **🧮 คำนวณภาษี** และดู **✂️ หัก ณ ที่จ่าย**",
+}
+if _utype in _rec:
+    st.info(_rec[_utype])
 
 # ===== Sidebar: ติดต่อผู้สร้าง / แจ้งปัญหา =====
 with st.sidebar:
@@ -542,11 +601,20 @@ with st.sidebar:
     st.markdown("[💬 Facebook: Siriwat Khotphat](https://www.facebook.com/siriwat.khotphat.2024/?locale=th_TH)")
     st.caption("📱 LINE ID: 0610950531")
     st.caption("☎️ โทร: 098-667-3680")
+    st.divider()
+    with st.expander("📋 ข้อจำกัดความรับผิด"):
+        st.caption(
+            "TaxSmart เป็นเครื่องมือช่วยคำนวณและบันทึกข้อมูลเบื้องต้นเท่านั้น "
+            "ผลการคำนวณภาษีเป็นการประมาณการ ไม่ใช่คำแนะนำทางกฎหมายหรือการเงินอย่างเป็นทางการ "
+            "ผู้ใช้ควรตรวจสอบกับกรมสรรพากรหรือผู้เชี่ยวชาญก่อนยื่นภาษีจริงเสมอ "
+            "ผู้พัฒนาไม่รับผิดชอบต่อความเสียหายที่เกิดจากการนำผลไปใช้โดยไม่ตรวจสอบ"
+        )
 
-tabD, tab1, tab2, tabShop, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5 = st.tabs([
+tabD, tab1, tab2, tabShop, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5, tabConsult = st.tabs([
     "🏠 ภาพรวม (Dashboard)", "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "🏪 ร้านค้า/ร้านอาหาร",
     "📅 ภาษีครึ่งปี (ภ.ง.ด.94)", "🧾 VAT (ภ.พ.30)", "✂️ หัก ณ ที่จ่าย", "📦 ต้นทุนสินค้า",
-    "💲 คำนวณราคาขาย", "📊 วิเคราะห์รายเดือน-ปี", "🔮 วางแผนการเงิน", "📖 คลังกฎหมายภาษี"
+    "💲 คำนวณราคาขาย", "📊 วิเคราะห์รายเดือน-ปี", "🔮 วางแผนการเงิน", "📖 คลังกฎหมายภาษี",
+    "🤝 ปรึกษาผู้เชี่ยวชาญ"
 ])
 
 # =====================================================================
@@ -1623,6 +1691,61 @@ with tabShop:
             st.error(f"🚨 รายได้ {total_revenue:,.0f} เกิน 1.8 ล้าน/ปี — ต้องจดทะเบียน VAT! เมื่อจดแล้วต้องแยกยอดขายกับ VAT 7% ที่เก็บจากลูกค้า ระวังกำไรลดลงถ้าไม่บวกราคาเพิ่ม")
 
         st.caption("⚠️ ประมาณการตามอัตราปีภาษี 2568-2569 | รายได้ต้องใช้ยอดเต็มก่อนหัก GP | ควรเก็บหลักฐานครบถ้วนหากหักตามจริง | ตรวจสอบกับกรมสรรพากรก่อนยื่นจริง")
+
+# =====================================================================
+#  TAB ปรึกษาผู้เชี่ยวชาญ — รับงานที่ปรึกษาภาษี/การเงิน
+# =====================================================================
+with tabConsult:
+    st.subheader("🤝 ปรึกษาผู้เชี่ยวชาญด้านภาษีและการเงิน")
+    st.markdown("""
+    ต้องการคำปรึกษาเฉพาะทางจากผู้เชี่ยวชาญที่จบด้านบัญชีโดยตรง? เรารับให้คำปรึกษาและบริการดังนี้:
+    """)
+
+    cs1, cs2, cs3 = st.columns(3)
+    with cs1:
+        st.markdown("##### 📊 วางแผนภาษี")
+        st.caption("วางแผนภาษีให้ประหยัดและถูกกฎหมาย เลือกวิธีหักค่าใช้จ่าย จัดการลดหย่อน")
+    with cs2:
+        st.markdown("##### 💰 วางแผนการเงิน")
+        st.caption("วางแผนการเงินส่วนบุคคลและธุรกิจ จัดสรรงบ ตั้งเป้าหมายการออม")
+    with cs3:
+        st.markdown("##### 📈 บริหารการเงิน")
+        st.caption("ดูแลกระแสเงินสด วิเคราะห์กำไรขาดทุน ให้คำแนะนำการเติบโต")
+
+    st.divider()
+    st.markdown("##### 📮 ส่งเรื่องที่ต้องการปรึกษา")
+    st.caption("กรอกเรื่องที่อยากปรึกษา แล้วเราจะติดต่อกลับผ่านช่องทางที่คุณสะดวก")
+    with st.form("consult_form", clear_on_submit=True):
+        cf1, cf2 = st.columns(2)
+        with cf1:
+            c_service = st.selectbox("บริการที่สนใจ", ["วางแผนภาษี", "วางแผนการเงิน", "บริหารการเงิน", "อื่นๆ"])
+        with cf2:
+            c_contact = st.text_input("ช่องทางติดต่อกลับ (เบอร์/LINE/อีเมล)")
+        c_detail = st.text_area("รายละเอียดเรื่องที่ต้องการปรึกษา", height=120,
+                                placeholder="เช่น ร้านอาหารรายได้ปีละ 2 ล้าน อยากวางแผนภาษีให้ประหยัด...")
+        if st.form_submit_button("📨 ส่งคำขอปรึกษา", use_container_width=True):
+            if c_detail.strip() and c_contact.strip():
+                conn = get_conn()
+                conn.execute(
+                    "INSERT INTO consult_requests (user_id, service, contact, detail) VALUES (?,?,?,?)",
+                    (USER, c_service, c_contact.strip(), c_detail.strip())
+                )
+                conn.commit(); conn.close()
+                st.success("✅ ส่งคำขอเรียบร้อย! เราจะติดต่อกลับโดยเร็วที่สุด ขอบคุณที่ไว้วางใจ")
+            else:
+                st.error("กรุณากรอกช่องทางติดต่อและรายละเอียดก่อนส่ง")
+
+    st.divider()
+    st.markdown("##### 📞 ติดต่อโดยตรง")
+    dc1, dc2, dc3 = st.columns(3)
+    with dc1:
+        st.markdown("[💬 Facebook](https://www.facebook.com/siriwat.khotphat.2024/?locale=th_TH)")
+    with dc2:
+        st.markdown("**📱 LINE:** 0610950531")
+    with dc3:
+        st.markdown("**☎️ โทร:** 098-667-3680")
+
+    st.caption("⚠️ บริการให้คำปรึกษาเป็นบริการเสริมนอกเหนือจากเครื่องมือคำนวณในระบบ")
 
 # =====================================================================
 #  TAB 5 — คลังกฎหมายภาษี
