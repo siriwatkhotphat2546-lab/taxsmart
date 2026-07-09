@@ -499,10 +499,51 @@ def calc_weighted_avg(movements):
 # =====================================================================
 #  HEADER
 # =====================================================================
-# ===== ระบบแยกผู้ใช้ ระดับ 1 (พิมพ์ชื่อเข้าใช้) =====
+# ===== PDPA: หน้าขอความยินยอม (แสดงก่อนเข้าใช้ครั้งแรก) =====
 if "user_id" not in st.session_state:
     st.session_state.user_id = None
+if "pdpa_consent" not in st.session_state:
+    st.session_state.pdpa_consent = False
 
+if not st.session_state.pdpa_consent:
+    st.title("💰 TaxSmart")
+    st.markdown("#### 🔒 นโยบายความเป็นส่วนตัว และการขอความยินยอม")
+    st.markdown("""
+    ก่อนเริ่มใช้งาน กรุณาอ่านและยอมรับนโยบายความเป็นส่วนตัว ตามพระราชบัญญัติคุ้มครองข้อมูลส่วนบุคคล พ.ศ. 2562 (PDPA)
+    """)
+    with st.expander("📋 อ่านนโยบายความเป็นส่วนตัวฉบับเต็ม", expanded=True):
+        st.markdown("""
+**1. ข้อมูลที่เราเก็บ**
+เราเก็บข้อมูลที่คุณกรอกเข้าระบบ ได้แก่ ชื่อผู้ใช้ที่คุณตั้ง, รายการรายรับ-รายจ่าย, ข้อมูลภาษีและบัญชี, และข้อมูลที่คุณกรอกในฟอร์มต่างๆ
+
+**2. วัตถุประสงค์การเก็บข้อมูล**
+เพื่อใช้ในการคำนวณภาษี บันทึกบัญชี วิเคราะห์การเงิน และแสดงผลย้อนหลังให้คุณเท่านั้น เราไม่นำข้อมูลไปขายหรือเปิดเผยต่อบุคคลภายนอกโดยไม่ได้รับความยินยอม
+
+**3. ระยะเวลาการเก็บข้อมูล**
+เราเก็บข้อมูลไว้ตราบเท่าที่คุณยังใช้งาน คุณสามารถขอลบข้อมูลของตัวเองได้ตลอดเวลาผ่านเมนูในระบบ
+
+**4. สิทธิของคุณ (เจ้าของข้อมูล)**
+คุณมีสิทธิขอดู แก้ไข ดาวน์โหลด หรือลบข้อมูลส่วนบุคคลของคุณได้ตลอดเวลา ผ่านเมนู "ข้อมูลส่วนตัว/PDPA" ในระบบ
+
+**5. มาตรการความปลอดภัย**
+เราจัดให้มีมาตรการรักษาความปลอดภัยตามสมควรเพื่อป้องกันการเข้าถึงข้อมูลโดยไม่ได้รับอนุญาต อย่างไรก็ตาม ระบบนี้อยู่ในช่วงทดสอบ แนะนำไม่ให้กรอกข้อมูลที่เป็นความลับสูงสุด
+
+**6. การติดต่อผู้ควบคุมข้อมูล**
+หากมีข้อสงสัยเรื่องข้อมูลส่วนบุคคล ติดต่อได้ที่ LINE: 0610950531 หรือโทร 098-667-3680
+
+**7. หมายเหตุ**
+TaxSmart เป็นเครื่องมือช่วยคำนวณเบื้องต้น ไม่ใช่คำแนะนำทางกฎหมายหรือการเงินอย่างเป็นทางการ ควรตรวจสอบกับกรมสรรพากรก่อนยื่นจริง
+        """)
+
+    agree = st.checkbox("ฉันได้อ่านและยอมรับนโยบายความเป็นส่วนตัว และยินยอมให้เก็บรวบรวมและใช้ข้อมูลตามวัตถุประสงค์ข้างต้น")
+    if st.button("ยอมรับและเริ่มใช้งาน →", use_container_width=True, disabled=not agree):
+        if agree:
+            st.session_state.pdpa_consent = True
+            st.rerun()
+    st.caption("การกดยอมรับถือว่าคุณให้ความยินยอมตาม PDPA — คุณสามารถถอนความยินยอมและลบข้อมูลได้ภายหลัง")
+    st.stop()
+
+# ===== ระบบแยกผู้ใช้ ระดับ 1 (พิมพ์ชื่อเข้าใช้) =====
 if not st.session_state.user_id:
     st.title("💰 TaxSmart")
     st.markdown("#### เข้าใช้งาน — กรุณาพิมพ์ชื่อผู้ใช้ของคุณ")
@@ -610,11 +651,11 @@ with st.sidebar:
             "ผู้พัฒนาไม่รับผิดชอบต่อความเสียหายที่เกิดจากการนำผลไปใช้โดยไม่ตรวจสอบ"
         )
 
-tabD, tab1, tab2, tabShop, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5, tabConsult = st.tabs([
+tabD, tab1, tab2, tabShop, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5, tabConsult, tabPDPA = st.tabs([
     "🏠 ภาพรวม (Dashboard)", "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "🏪 ร้านค้า/ร้านอาหาร",
     "📅 ภาษีครึ่งปี (ภ.ง.ด.94)", "🧾 VAT (ภ.พ.30)", "✂️ หัก ณ ที่จ่าย", "📦 ต้นทุนสินค้า",
     "💲 คำนวณราคาขาย", "📊 วิเคราะห์รายเดือน-ปี", "🔮 วางแผนการเงิน", "📖 คลังกฎหมายภาษี",
-    "🤝 ปรึกษาผู้เชี่ยวชาญ"
+    "🤝 ปรึกษาผู้เชี่ยวชาญ", "🔒 ข้อมูลส่วนตัว/PDPA"
 ])
 
 # =====================================================================
@@ -1746,6 +1787,82 @@ with tabConsult:
         st.markdown("**☎️ โทร:** 098-667-3680")
 
     st.caption("⚠️ บริการให้คำปรึกษาเป็นบริการเสริมนอกเหนือจากเครื่องมือคำนวณในระบบ")
+
+# =====================================================================
+#  TAB PDPA — จัดการข้อมูลส่วนตัว (สิทธิเจ้าของข้อมูลตาม PDPA)
+# =====================================================================
+with tabPDPA:
+    st.subheader("🔒 ข้อมูลส่วนตัวและสิทธิของคุณ (PDPA)")
+    st.markdown("""
+    ตามพระราชบัญญัติคุ้มครองข้อมูลส่วนบุคคล พ.ศ. 2562 คุณมีสิทธิเหนือข้อมูลของตัวเอง
+    ที่นี่คุณสามารถ **ดู ดาวน์โหลด หรือลบ** ข้อมูลทั้งหมดของคุณได้
+    """)
+
+    conn = get_conn()
+    my_txn = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
+    my_consult = pd.read_sql_query("SELECT * FROM consult_requests WHERE user_id=?", conn, params=(USER,))
+    try:
+        my_inv = pd.read_sql_query("SELECT * FROM inventory WHERE user_id=?", conn, params=(USER,))
+    except Exception:
+        my_inv = pd.DataFrame()
+    conn.close()
+
+    st.divider()
+    st.markdown("##### 📊 ข้อมูลที่ระบบเก็บของคุณ")
+    pc1, pc2, pc3 = st.columns(3)
+    pc1.metric("รายการบัญชี", f"{len(my_txn)} รายการ")
+    pc2.metric("คำขอปรึกษา", f"{len(my_consult)} รายการ")
+    pc3.metric("รายการสินค้า", f"{len(my_inv)} รายการ")
+
+    # ===== สิทธิที่ 1: ดูข้อมูล =====
+    with st.expander("👁️ ดูข้อมูลทั้งหมดของฉัน"):
+        st.markdown("**รายการบัญชี**")
+        st.dataframe(my_txn, use_container_width=True, hide_index=True) if not my_txn.empty else st.caption("ยังไม่มีข้อมูล")
+        if not my_consult.empty:
+            st.markdown("**คำขอปรึกษา**")
+            st.dataframe(my_consult, use_container_width=True, hide_index=True)
+
+    # ===== สิทธิที่ 2: ดาวน์โหลดข้อมูล =====
+    st.markdown("##### 📥 ดาวน์โหลดข้อมูลของคุณ (สิทธิในการเข้าถึงข้อมูล)")
+    if not my_txn.empty:
+        csv_data = my_txn.to_csv(index=False).encode("utf-8-sig")
+        st.download_button("⬇️ ดาวน์โหลดข้อมูลบัญชี (CSV)", csv_data,
+                          file_name=f"taxsmart_data_{USER}.csv", mime="text/csv")
+    else:
+        st.caption("ยังไม่มีข้อมูลให้ดาวน์โหลด")
+
+    # ===== สิทธิที่ 3: ลบข้อมูล =====
+    st.divider()
+    st.markdown("##### 🗑️ ลบข้อมูลของฉัน (สิทธิในการลบข้อมูล)")
+    st.warning("⚠️ การลบข้อมูลจะลบถาวร ไม่สามารถกู้คืนได้ กรุณาดาวน์โหลดเก็บไว้ก่อนถ้าต้องการ")
+
+    if st.session_state.get("confirm_delete_pdpa"):
+        st.error("ยืนยันการลบข้อมูลทั้งหมดของคุณ? การกระทำนี้ย้อนกลับไม่ได้")
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            if st.button("✅ ยืนยันลบข้อมูลทั้งหมด", use_container_width=True):
+                conn = get_conn()
+                conn.execute("DELETE FROM transactions WHERE user_id=?", (USER,))
+                conn.execute("DELETE FROM consult_requests WHERE user_id=?", (USER,))
+                try:
+                    conn.execute("DELETE FROM inventory WHERE user_id=?", (USER,))
+                except Exception:
+                    pass
+                conn.commit(); conn.close()
+                st.session_state.confirm_delete_pdpa = False
+                st.success("✅ ลบข้อมูลทั้งหมดของคุณเรียบร้อยแล้ว")
+                st.rerun()
+        with dc2:
+            if st.button("ยกเลิก", use_container_width=True):
+                st.session_state.confirm_delete_pdpa = False
+                st.rerun()
+    else:
+        if st.button("🗑️ ขอลบข้อมูลทั้งหมดของฉัน"):
+            st.session_state.confirm_delete_pdpa = True
+            st.rerun()
+
+    st.divider()
+    st.caption("📖 อ่านนโยบายความเป็นส่วนตัวฉบับเต็มได้ที่หน้าแรกก่อนเข้าใช้งาน | ติดต่อผู้ควบคุมข้อมูล: LINE 0610950531")
 
 # =====================================================================
 #  TAB 5 — คลังกฎหมายภาษี
