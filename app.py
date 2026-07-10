@@ -179,30 +179,44 @@ USE_PG = _get_pg_url() is not None
 
 if USE_PG:
     from sqlalchemy import create_engine, text as _sql_text
-    _engine = create_engine(_get_pg_url(), pool_pre_ping=True, pool_recycle=280)
+    # ใช้ SQLAlchemy engine ล้วน (เสถียร รองรับ pandas โดยตรง)
+    _pg_url = _get_pg_url()
+    # ใช้ pg8000 (Python ล้วน ไม่มีปัญหา segfault) แทน psycopg2
+    if _pg_url.startswith("postgresql://"):
+        _pg_url = _pg_url.replace("postgresql://", "postgresql+pg8000://", 1)
+    elif _pg_url.startswith("postgres://"):
+        _pg_url = _pg_url.replace("postgres://", "postgresql+pg8000://", 1)
+    _engine = create_engine(_pg_url, pool_pre_ping=True, pool_recycle=280)
 
 class _PGConnWrapper:
-    """ห่อ connection ของ Postgres ให้ใช้งานเหมือน sqlite3 (execute/executemany/commit/close + แปลง ? เป็น %s)"""
-    def __init__(self, raw):
-        self._raw = raw
-    def _conv(self, sql):
-        # แปลง placeholder ? -> %s และ AUTOINCREMENT -> SERIAL สำหรับ Postgres
-        return sql.replace("?", "%s")
+    """ห่อ SQLAlchemy connection ให้ใช้งานเหมือน sqlite3 (execute/executemany/commit/close + แปลง ? เป็น :p0,:p1)"""
+    def __init__(self, sa_conn):
+        self._c = sa_conn
+    def _prep(self, sql, params):
+        # แปลง ? เป็น named parameter :p0 :p1 ... สำหรับ SQLAlchemy text()
+        if params:
+            parts = sql.split("?")
+            new_sql = ""
+            pdict = {}
+            for i, part in enumerate(parts[:-1]):
+                new_sql += part + f":p{i}"
+                pdict[f"p{i}"] = params[i]
+            new_sql += parts[-1]
+            return _sql_text(new_sql), pdict
+        return _sql_text(sql), {}
     def execute(self, sql, params=None):
-        cur = self._raw.cursor()
-        cur.execute(self._conv(sql), params or ())
-        return cur
+        s, p = self._prep(sql, params)
+        return self._c.execute(s, p)
     def executemany(self, sql, seq):
-        cur = self._raw.cursor()
-        cur.executemany(self._conv(sql), seq)
-        return cur
+        for params in seq:
+            self.execute(sql, params)
     def commit(self):
-        self._raw.commit()
+        self._c.commit()
     def close(self):
-        self._raw.close()
+        self._c.close()
     @property
-    def raw(self):
-        return self._raw
+    def engine(self):
+        return _engine
 
 def _create_tables_sqlite(conn):
     conn.execute("""
@@ -252,8 +266,7 @@ def _create_tables_sqlite(conn):
     conn.commit()
 
 _PG_TABLES_READY = False
-def _create_tables_pg(conn):
-    # ใช้ SERIAL แทน AUTOINCREMENT, TIMESTAMP แทน TEXT created_at
+def _create_tables_pg():
     stmts = [
         """CREATE TABLE IF NOT EXISTS transactions (
             id SERIAL PRIMARY KEY, txn_date TEXT NOT NULL, txn_type TEXT NOT NULL,
@@ -271,20 +284,17 @@ def _create_tables_pg(conn):
             id SERIAL PRIMARY KEY, user_id TEXT, service TEXT, contact TEXT, detail TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
     ]
-    cur = conn.raw.cursor()
-    for s in stmts:
-        cur.execute(s)
-    conn.raw.commit()
+    with _engine.begin() as c:
+        for s in stmts:
+            c.execute(_sql_text(s))
 
 def get_conn():
     if USE_PG:
-        raw = _engine.raw_connection()
-        conn = _PGConnWrapper(raw)
         global _PG_TABLES_READY
         if not _PG_TABLES_READY:
-            _create_tables_pg(conn)
+            _create_tables_pg()
             _PG_TABLES_READY = True
-        return conn
+        return _PGConnWrapper(_engine.connect())
     else:
         conn = sqlite3.connect(DB)
         _create_tables_sqlite(conn)
@@ -293,8 +303,17 @@ def get_conn():
 # ตัวช่วยอ่านข้อมูลเป็น DataFrame ให้ทำงานได้ทั้ง 2 ฐานข้อมูล
 def read_sql(sql, conn, params=None):
     if USE_PG:
-        sql_pg = sql.replace("?", "%s")
-        return pd.read_sql_query(sql_pg, conn.raw, params=params)
+        # แปลง ? เป็น named param แล้วอ่านผ่าน SQLAlchemy engine (pandas รองรับ)
+        if params:
+            parts = sql.split("?")
+            new_sql = ""
+            pdict = {}
+            for i, part in enumerate(parts[:-1]):
+                new_sql += part + f":p{i}"
+                pdict[f"p{i}"] = params[i]
+            new_sql += parts[-1]
+            return pd.read_sql_query(_sql_text(new_sql), _engine, params=pdict)
+        return pd.read_sql_query(_sql_text(sql), _engine)
     else:
         return pd.read_sql_query(sql, conn, params=params)
 
