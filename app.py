@@ -163,25 +163,60 @@ hr{border-color:var(--line) !important;}
 """, unsafe_allow_html=True)
 
 # =====================================================================
-#  ฐานข้อมูลกลาง (Single Source of Truth)
+#  ฐานข้อมูลกลาง (Single Source of Truth) — รองรับทั้ง SQLite และ Supabase(Postgres)
 # =====================================================================
 DB = "taxsmart.db"
 
-def get_conn():
-    conn = sqlite3.connect(DB)
+# ตรวจว่ามี Supabase connection string ใน Secrets หรือไม่
+def _get_pg_url():
+    try:
+        url = st.secrets.get("DB_CONNECTION", None)
+        return url if url else None
+    except Exception:
+        return None
+
+USE_PG = _get_pg_url() is not None
+
+if USE_PG:
+    from sqlalchemy import create_engine, text as _sql_text
+    _engine = create_engine(_get_pg_url(), pool_pre_ping=True, pool_recycle=280)
+
+class _PGConnWrapper:
+    """ห่อ connection ของ Postgres ให้ใช้งานเหมือน sqlite3 (execute/executemany/commit/close + แปลง ? เป็น %s)"""
+    def __init__(self, raw):
+        self._raw = raw
+    def _conv(self, sql):
+        # แปลง placeholder ? -> %s และ AUTOINCREMENT -> SERIAL สำหรับ Postgres
+        return sql.replace("?", "%s")
+    def execute(self, sql, params=None):
+        cur = self._raw.cursor()
+        cur.execute(self._conv(sql), params or ())
+        return cur
+    def executemany(self, sql, seq):
+        cur = self._raw.cursor()
+        cur.executemany(self._conv(sql), seq)
+        return cur
+    def commit(self):
+        self._raw.commit()
+    def close(self):
+        self._raw.close()
+    @property
+    def raw(self):
+        return self._raw
+
+def _create_tables_sqlite(conn):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             txn_date TEXT NOT NULL,
-            txn_type TEXT NOT NULL,          -- รายรับ / รายจ่าย
-            income_type TEXT,                -- ประเภทเงินได้ ม.40(x) (เฉพาะรายรับ)
+            txn_type TEXT NOT NULL,
+            income_type TEXT,
             category TEXT NOT NULL,
             description TEXT,
             amount REAL NOT NULL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # ----- Auto-migration: เพิ่มคอลัมน์ที่ขาดให้ตารางเก่า โดยไม่ลบข้อมูลเดิม -----
     existing = [r[1] for r in conn.execute("PRAGMA table_info(transactions)").fetchall()]
     migrations = {
         "income_type": "ALTER TABLE transactions ADD COLUMN income_type TEXT",
@@ -192,42 +227,76 @@ def get_conn():
     for col, sql in migrations.items():
         if col not in existing:
             conn.execute(sql)
-    # ตารางเก็บข้อความติดต่อ/แจ้งปัญหา
     conn.execute("""
         CREATE TABLE IF NOT EXISTS feedback (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            fb_type TEXT,
-            message TEXT,
+            user_id TEXT, fb_type TEXT, message TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # ตารางเคลื่อนไหวสินค้า (ซื้อเข้า/ขายออก) สำหรับคำนวณต้นทุน
     conn.execute("""
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            move_date TEXT NOT NULL,
-            product TEXT NOT NULL,
-            move_type TEXT NOT NULL,
-            qty REAL NOT NULL,
-            unit_cost REAL,
+            user_id TEXT, move_date TEXT NOT NULL, product TEXT NOT NULL,
+            move_type TEXT NOT NULL, qty REAL NOT NULL, unit_cost REAL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # ตารางคำขอปรึกษาผู้เชี่ยวชาญ
     conn.execute("""
         CREATE TABLE IF NOT EXISTS consult_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            service TEXT,
-            contact TEXT,
-            detail TEXT,
+            user_id TEXT, service TEXT, contact TEXT, detail TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
-    return conn
+
+_PG_TABLES_READY = False
+def _create_tables_pg(conn):
+    # ใช้ SERIAL แทน AUTOINCREMENT, TIMESTAMP แทน TEXT created_at
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS transactions (
+            id SERIAL PRIMARY KEY, txn_date TEXT NOT NULL, txn_type TEXT NOT NULL,
+            income_type TEXT, category TEXT NOT NULL, description TEXT,
+            amount REAL NOT NULL, user_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS feedback (
+            id SERIAL PRIMARY KEY, user_id TEXT, fb_type TEXT, message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS inventory (
+            id SERIAL PRIMARY KEY, user_id TEXT, move_date TEXT NOT NULL, product TEXT NOT NULL,
+            move_type TEXT NOT NULL, qty REAL NOT NULL, unit_cost REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS consult_requests (
+            id SERIAL PRIMARY KEY, user_id TEXT, service TEXT, contact TEXT, detail TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+    ]
+    cur = conn.raw.cursor()
+    for s in stmts:
+        cur.execute(s)
+    conn.raw.commit()
+
+def get_conn():
+    if USE_PG:
+        raw = _engine.raw_connection()
+        conn = _PGConnWrapper(raw)
+        global _PG_TABLES_READY
+        if not _PG_TABLES_READY:
+            _create_tables_pg(conn)
+            _PG_TABLES_READY = True
+        return conn
+    else:
+        conn = sqlite3.connect(DB)
+        _create_tables_sqlite(conn)
+        return conn
+
+# ตัวช่วยอ่านข้อมูลเป็น DataFrame ให้ทำงานได้ทั้ง 2 ฐานข้อมูล
+def read_sql(sql, conn, params=None):
+    if USE_PG:
+        sql_pg = sql.replace("?", "%s")
+        return pd.read_sql_query(sql_pg, conn.raw, params=params)
+    else:
+        return pd.read_sql_query(sql, conn, params=params)
 
 # =====================================================================
 #  คลังความรู้กฎหมายภาษี — ประเภทเงินได้ ม.40 และวิธีหักค่าใช้จ่าย
@@ -664,7 +733,7 @@ tabD, tab1, tab2, tabShop, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5, tabC
 with tabD:
     st.subheader("🏠 ภาพรวมสุขภาพการเงินของคุณ")
     conn = get_conn()
-    df_d = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
+    df_d = read_sql("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
     conn.close()
 
     if df_d.empty:
@@ -798,7 +867,7 @@ with tab1:
                 st.success(f"✅ บันทึก {txn_type} {amount:,.2f} บาท เรียบร้อย!")
 
     conn = get_conn()
-    df = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=? ORDER BY txn_date DESC, id DESC", conn, params=(USER,))
+    df = read_sql("SELECT * FROM transactions WHERE user_id=? ORDER BY txn_date DESC, id DESC", conn, params=(USER,))
     conn.close()
 
     st.divider()
@@ -884,7 +953,7 @@ with tab2:
     st.subheader("🧮 คำนวณภาษีเงินได้บุคคลธรรมดา")
 
     conn = get_conn()
-    inc = pd.read_sql_query("SELECT * FROM transactions WHERE txn_type='รายรับ' AND user_id=?", conn, params=(USER,))
+    inc = read_sql("SELECT * FROM transactions WHERE txn_type='รายรับ' AND user_id=?", conn, params=(USER,))
     conn.close()
 
     if inc.empty:
@@ -1068,7 +1137,7 @@ with tab2:
 with tab3:
     st.subheader("📊 วิเคราะห์รายรับ-รายจ่าย รายเดือนและรายปี")
     conn = get_conn()
-    df = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
+    df = read_sql("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
     conn.close()
 
     if df.empty:
@@ -1143,7 +1212,7 @@ with tab3:
 with tab4:
     st.subheader("🔮 คาดการณ์และวางแผนการเงินในอนาคต")
     conn = get_conn()
-    df = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
+    df = read_sql("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
     conn.close()
 
     if df.empty:
@@ -1213,7 +1282,7 @@ with tab6:
     }
 
     conn = get_conn()
-    inc_h = pd.read_sql_query(
+    inc_h = read_sql(
         "SELECT * FROM transactions WHERE txn_type='รายรับ' AND user_id=?",
         conn, params=(USER,)
     )
@@ -1312,7 +1381,7 @@ with tab7:
     VAT_RATE = 0.07
 
     conn = get_conn()
-    df_v = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
+    df_v = read_sql("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
     conn.close()
 
     if df_v.empty:
@@ -1477,7 +1546,7 @@ with tab9:
                 st.success(f"✅ บันทึก {move_type} {product} จำนวน {qty:,.0f} เรียบร้อย")
 
     conn = get_conn()
-    inv_df = pd.read_sql_query(
+    inv_df = read_sql(
         "SELECT * FROM inventory WHERE user_id=? ORDER BY move_date, id", conn, params=(USER,)
     )
     conn.close()
@@ -1799,10 +1868,10 @@ with tabPDPA:
     """)
 
     conn = get_conn()
-    my_txn = pd.read_sql_query("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
-    my_consult = pd.read_sql_query("SELECT * FROM consult_requests WHERE user_id=?", conn, params=(USER,))
+    my_txn = read_sql("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
+    my_consult = read_sql("SELECT * FROM consult_requests WHERE user_id=?", conn, params=(USER,))
     try:
-        my_inv = pd.read_sql_query("SELECT * FROM inventory WHERE user_id=?", conn, params=(USER,))
+        my_inv = read_sql("SELECT * FROM inventory WHERE user_id=?", conn, params=(USER,))
     except Exception:
         my_inv = pd.DataFrame()
     conn.close()
