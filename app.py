@@ -285,6 +285,27 @@ def _create_tables_sqlite(conn):
     }.items():
         if col not in ucols:
             conn.execute(sql)
+    # ===== ระบบกระเป๋าเงิน =====
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS wallets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            wtype TEXT DEFAULT 'ธนาคาร',
+            opening_balance REAL DEFAULT 0,
+            is_business INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # auto-migration: เพิ่มคอลัมน์กระเป๋า + เงินได้/ไม่ใช่เงินได้
+    tcols = [r[1] for r in conn.execute("PRAGMA table_info(transactions)").fetchall()]
+    for col, sql in {
+        "wallet": "ALTER TABLE transactions ADD COLUMN wallet TEXT",
+        "is_taxable": "ALTER TABLE transactions ADD COLUMN is_taxable INTEGER DEFAULT 1",
+        "non_income_type": "ALTER TABLE transactions ADD COLUMN non_income_type TEXT",
+    }.items():
+        if col not in tcols:
+            conn.execute(sql)
     # ตารางการชำระเงิน
     conn.execute("""
         CREATE TABLE IF NOT EXISTS payments (
@@ -347,6 +368,14 @@ def _create_tables_pg():
             id SERIAL PRIMARY KEY, exp_date TEXT NOT NULL, category TEXT NOT NULL,
             description TEXT, amount REAL NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS wallets (
+            id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,
+            wtype TEXT DEFAULT 'ธนาคาร', opening_balance REAL DEFAULT 0,
+            is_business INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """ALTER TABLE transactions ADD COLUMN IF NOT EXISTS wallet TEXT""",
+        """ALTER TABLE transactions ADD COLUMN IF NOT EXISTS is_taxable INTEGER DEFAULT 1""",
+        """ALTER TABLE transactions ADD COLUMN IF NOT EXISTS non_income_type TEXT""",
     ]
     with _engine.begin() as c:
         for s in stmts:
@@ -1279,8 +1308,41 @@ if st.session_state.get("is_admin") and IS_ADMIN_USER:
         st.rerun()
     st.stop()
 
-tabD, tab1, tab2, tabCareer, tabShop, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5, tabConsult, tabUpgrade, tabPDPA = st.tabs([
-    "🏠 ภาพรวม (Dashboard)", "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "👔 ภาษีตามอาชีพ", "🏪 ร้านค้า/ร้านอาหาร",
+
+# =====================================================================
+#  ระบบกระเป๋าเงิน (Wallets) + แยกเงินได้ / ไม่ใช่เงินได้
+# =====================================================================
+NON_INCOME_TYPES = {
+    "เงินโอนจากญาติ/เพื่อน": "เงินให้เปล่าจากบุคคล ไม่ถือเป็นเงินได้พึงประเมิน",
+    "เงินกู้ยืม": "เป็นหนี้สิน ไม่ใช่รายได้",
+    "เงินคืนภาษี": "เป็นเงินที่จ่ายเกินไปแล้วได้คืน ไม่ใช่รายได้ใหม่",
+    "โอนระหว่างบัญชีตัวเอง": "แค่ย้ายเงิน ไม่ใช่รายได้ (สำคัญ! ถ้านับผิดจะเสียภาษีเกิน)",
+    "เงินทอน/คืนสินค้า": "เงินที่ได้คืนจากการซื้อ ไม่ใช่รายได้",
+    "เงินลงทุนจากเจ้าของ": "เงินทุนที่ใส่เข้ากิจการ ไม่ใช่รายได้",
+    "รางวัล/ของขวัญ (ไม่เกินเกณฑ์)": "ตรวจสอบเกณฑ์ยกเว้นกับสรรพากร",
+    "อื่นๆ (ไม่ใช่เงินได้)": "ระบุเพิ่มในรายละเอียด",
+}
+
+def get_wallets(username):
+    conn = get_conn()
+    w = read_sql("SELECT * FROM wallets WHERE user_id=? ORDER BY id", conn, params=(username,))
+    conn.close()
+    return w
+
+def calc_wallet_balance(username, wallet_name, opening):
+    """ยอดคงเหลือ = ยอดยกมา + รายรับ - รายจ่าย (ทุกรายการ ไม่ว่าจะเป็นเงินได้หรือไม่)"""
+    conn = get_conn()
+    df = read_sql("SELECT txn_type, amount FROM transactions WHERE user_id=? AND wallet=?",
+                  conn, params=(username, wallet_name))
+    conn.close()
+    if df.empty:
+        return float(opening), 0.0, 0.0
+    inflow = df[df.txn_type == "รายรับ"]["amount"].sum()
+    outflow = df[df.txn_type == "รายจ่าย"]["amount"].sum()
+    return float(opening) + inflow - outflow, inflow, outflow
+
+tabD, tabWallet, tab1, tab2, tabCareer, tabShop, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5, tabConsult, tabUpgrade, tabPDPA = st.tabs([
+    "🏠 ภาพรวม (Dashboard)", "👛 กระเป๋าเงิน", "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "👔 ภาษีตามอาชีพ", "🏪 ร้านค้า/ร้านอาหาร",
     "📅 ภาษีครึ่งปี (ภ.ง.ด.94)", "🧾 VAT (ภ.พ.30)", "✂️ หัก ณ ที่จ่าย", "📦 ต้นทุนสินค้า",
     "💲 คำนวณราคาขาย", "📊 วิเคราะห์รายเดือน-ปี", "🔮 วางแผนการเงิน", "📖 คลังกฎหมายภาษี",
     "🤝 ปรึกษาผู้เชี่ยวชาญ", "⭐ อัปเกรดแพ็กเกจ", "🔒 ข้อมูลส่วนตัว/PDPA"
@@ -1387,24 +1449,189 @@ with tabD:
 
 
 # =====================================================================
+#  TAB กระเป๋าเงิน — จัดการหลายกระเป๋า + ยอดคงเหลือ + กระทบยอด
+# =====================================================================
+with tabWallet:
+    st.subheader("👛 กระเป๋าเงินของคุณ")
+    st.caption("จัดการเงินหลายที่ — ธนาคาร เงินสด บัญชีร้าน แล้วดูยอดคงเหลือจริงทุกที่")
+
+    my_wallets = get_wallets(USER)
+
+    # ---------- สร้างกระเป๋าใหม่ ----------
+    with st.expander("➕ เพิ่มกระเป๋าเงินใหม่", expanded=my_wallets.empty):
+        if my_wallets.empty:
+            st.info("👋 เริ่มต้นใช้งาน: เพิ่มกระเป๋าเงินของคุณ แล้วกรอก **ยอดเงินที่มีอยู่ตอนนี้** เพื่อให้ระบบคำนวณยอดคงเหลือได้ถูกต้อง")
+        with st.form("wallet_form", clear_on_submit=True):
+            wf1, wf2, wf3 = st.columns(3)
+            with wf1:
+                w_name = st.text_input("ชื่อกระเป๋า", placeholder="เช่น กสิกร ส่วนตัว")
+            with wf2:
+                w_type = st.selectbox("ประเภท", ["🏦 ธนาคาร", "💵 เงินสด", "📱 PromptPay/e-Wallet", "🏪 บัญชีร้าน"])
+            with wf3:
+                w_open = st.number_input("ยอดเงินที่มีอยู่ตอนนี้ (บาท)", min_value=0.0, step=100.0, format="%.2f",
+                                         help="กรอกยอดเงินจริงที่มีในกระเป๋านี้ ณ ตอนนี้")
+            w_biz = st.checkbox("เป็นกระเป๋าของกิจการ/ร้าน (แยกจากเงินส่วนตัว)")
+            if st.form_submit_button("เพิ่มกระเป๋า", use_container_width=True):
+                if w_name.strip():
+                    conn = get_conn()
+                    conn.execute(
+                        "INSERT INTO wallets (user_id, name, wtype, opening_balance, is_business) VALUES (?,?,?,?,?)",
+                        (USER, w_name.strip(), w_type, float(w_open), 1 if w_biz else 0)
+                    )
+                    conn.commit(); conn.close()
+                    st.success(f"✅ เพิ่มกระเป๋า '{w_name}' แล้ว")
+                    st.rerun()
+                else:
+                    st.error("กรุณาตั้งชื่อกระเป๋า")
+
+    if my_wallets.empty:
+        st.warning("⚠️ ยังไม่มีกระเป๋าเงิน — เพิ่มกระเป๋าก่อน แล้วเวลาบันทึกรายการจะเลือกได้ว่าเงินเข้า/ออกจากกระเป๋าไหน")
+    else:
+        # ---------- ยอดคงเหลือแต่ละกระเป๋า ----------
+        st.divider()
+        st.markdown("##### 💰 ยอดคงเหลือปัจจุบัน")
+
+        total_all = 0.0
+        total_personal = 0.0
+        total_biz = 0.0
+        wallet_rows = []
+
+        for _, w in my_wallets.iterrows():
+            bal, inflow, outflow = calc_wallet_balance(USER, w["name"], w["opening_balance"])
+            total_all += bal
+            if w["is_business"]:
+                total_biz += bal
+            else:
+                total_personal += bal
+            wallet_rows.append({
+                "กระเป๋า": f"{w['wtype']} {w['name']}",
+                "ยอดยกมา": f"{w['opening_balance']:,.2f}",
+                "เงินเข้า": f"{inflow:,.2f}",
+                "เงินออก": f"{outflow:,.2f}",
+                "คงเหลือ": f"{bal:,.2f}",
+                "ประเภท": "🏪 กิจการ" if w["is_business"] else "🧑 ส่วนตัว",
+            })
+
+        b1, b2, b3 = st.columns(3)
+        b1.metric("💰 เงินรวมทั้งหมด", f"{total_all:,.2f} ฿")
+        b2.metric("🧑 เงินส่วนตัว", f"{total_personal:,.2f} ฿")
+        b3.metric("🏪 เงินกิจการ", f"{total_biz:,.2f} ฿")
+
+        st.dataframe(pd.DataFrame(wallet_rows), use_container_width=True, hide_index=True)
+
+        # ---------- แยกเงินได้ / ไม่ใช่เงินได้ (สำคัญมาก) ----------
+        st.divider()
+        st.markdown("##### 🧮 เงินในบัญชีเป็นเงินอะไรบ้าง? (สำคัญต่อการคิดภาษี)")
+        st.caption("ไม่ใช่เงินทุกบาทในบัญชีที่ต้องเสียภาษี — ระบบแยกให้เห็นชัด")
+
+        conn = get_conn()
+        df_all = read_sql("SELECT * FROM transactions WHERE user_id=? AND txn_type='รายรับ'", conn, params=(USER,))
+        conn.close()
+
+        if df_all.empty:
+            st.info("ยังไม่มีรายรับ — เริ่มบันทึกที่แท็บ 'บันทึกบัญชี'")
+        else:
+            if "is_taxable" not in df_all.columns:
+                df_all["is_taxable"] = 1
+            df_all["is_taxable"] = df_all["is_taxable"].fillna(1).astype(int)
+
+            taxable = df_all[df_all["is_taxable"] == 1]["amount"].sum()
+            non_taxable = df_all[df_all["is_taxable"] == 0]["amount"].sum()
+            total_in = taxable + non_taxable
+
+            t1, t2, t3 = st.columns(3)
+            t1.metric("💵 เงินเข้าทั้งหมด", f"{total_in:,.2f} ฿")
+            t2.metric("✅ เงินได้ (เสียภาษี)", f"{taxable:,.2f} ฿")
+            t3.metric("❌ ไม่ใช่เงินได้", f"{non_taxable:,.2f} ฿", "ไม่เสียภาษี")
+
+            if non_taxable > 0:
+                st.success(f"💡 ระบบตัดเงิน {non_taxable:,.0f} บาท ที่ไม่ใช่เงินได้ออกจากฐานภาษีให้แล้ว — ช่วยไม่ให้คุณเสียภาษีเกิน!")
+                # แยกรายละเอียด
+                non_df = df_all[df_all["is_taxable"] == 0]
+                if "non_income_type" in non_df.columns and not non_df.empty:
+                    breakdown = non_df.groupby("non_income_type")["amount"].sum().reset_index()
+                    breakdown.columns = ["ประเภท (ไม่ใช่เงินได้)", "จำนวนเงิน"]
+                    st.dataframe(breakdown, use_container_width=True, hide_index=True)
+
+            st.info("📌 **ฐานภาษีของคุณ = " + f"{taxable:,.2f} บาท** (ไม่ใช่ยอดเงินในบัญชีทั้งหมด)")
+
+        # ---------- กระทบยอด (Reconcile) ----------
+        st.divider()
+        st.markdown("##### 🔍 กระทบยอด — เช็คว่ายอดในระบบตรงกับธนาคารจริงไหม")
+        st.caption("ถ้ายอดไม่ตรง แปลว่าอาจลืมบันทึกรายการบางอย่าง")
+
+        rec1, rec2 = st.columns(2)
+        with rec1:
+            rec_wallet = st.selectbox("เลือกกระเป๋าที่จะกระทบยอด", my_wallets["name"].tolist(), key="rec_wallet")
+        with rec2:
+            actual_bal = st.number_input("ยอดจริงในธนาคาร/มือ (บาท)", min_value=0.0, step=100.0, format="%.2f", key="rec_actual")
+
+        if actual_bal > 0:
+            w_row = my_wallets[my_wallets["name"] == rec_wallet].iloc[0]
+            sys_bal, _, _ = calc_wallet_balance(USER, rec_wallet, w_row["opening_balance"])
+            diff = actual_bal - sys_bal
+
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric("ยอดในระบบ", f"{sys_bal:,.2f} ฿")
+            rc2.metric("ยอดจริง", f"{actual_bal:,.2f} ฿")
+            rc3.metric("ผลต่าง", f"{diff:,.2f} ฿", delta_color="off")
+
+            if abs(diff) < 0.01:
+                st.success("✅ ยอดตรงกันพอดี! บันทึกครบถ้วน ไม่มีอะไรตกหล่น")
+            elif diff > 0:
+                st.warning(f"⚠️ ยอดจริงมากกว่าระบบ {diff:,.2f} บาท — อาจมีเงินเข้าที่ยังไม่ได้บันทึก (เช่น ดอกเบี้ย เงินโอนเข้า)")
+            else:
+                st.warning(f"⚠️ ยอดจริงน้อยกว่าระบบ {abs(diff):,.2f} บาท — อาจมีรายจ่ายที่ยังไม่ได้บันทึก (เช่น ค่าธรรมเนียม ตัดบัตร)")
+
+        # ---------- ลบกระเป๋า ----------
+        with st.expander("🗑️ ลบกระเป๋าเงิน"):
+            del_w = st.selectbox("เลือกกระเป๋าที่จะลบ", my_wallets["name"].tolist(), key="del_wallet")
+            st.caption("⚠️ ลบกระเป๋าไม่ลบรายการที่บันทึกไว้ แต่รายการจะไม่มีกระเป๋าสังกัด")
+            if st.button("ลบกระเป๋านี้"):
+                conn = get_conn()
+                conn.execute("DELETE FROM wallets WHERE user_id=? AND name=?", (USER, del_w))
+                conn.commit(); conn.close()
+                st.success(f"ลบกระเป๋า '{del_w}' แล้ว")
+                st.rerun()
+
+    st.caption("💡 เคล็ดลับ: แยกบัญชีร้านกับบัญชีส่วนตัว จะทำให้สรุปยอดและคิดภาษีง่ายขึ้นมาก")
+
+# =====================================================================
 #  TAB 1 — บันทึกบัญชี (มีติ๊กเลือกประเภทเงินได้)
 # =====================================================================
 with tab1:
+    # ดึงกระเป๋าเงินของผู้ใช้
+    _w = get_wallets(USER)
+    _wallet_names = _w["name"].tolist() if not _w.empty else []
+
+    if not _wallet_names:
+        st.warning("⚠️ ยังไม่มีกระเป๋าเงิน — แนะนำให้ไปเพิ่มที่แท็บ **👛 กระเป๋าเงิน** ก่อน เพื่อให้ระบบคำนวณยอดคงเหลือได้ถูกต้อง (บันทึกได้ แต่จะไม่รู้ว่าเงินอยู่ที่ไหน)")
+
     with st.form("txn_form", clear_on_submit=True):
         st.subheader("📝 บันทึกรายการใหม่")
         c1, c2, c3 = st.columns(3)
         with c1:
             txn_date = st.date_input("วันที่", value=date.today())
             txn_type = st.selectbox("ประเภท", ["รายรับ", "รายจ่าย"])
+            sel_wallet = st.selectbox("💳 เงินเข้า/ออกจากกระเป๋าไหน",
+                                      _wallet_names if _wallet_names else ["(ยังไม่มีกระเป๋า)"])
         with c2:
-            # ติ๊กเลือกประเภทเงินได้ (เฉพาะรายรับ)
-            income_type = st.selectbox(
-                "ประเภทเงินได้ (ตามมาตรา 40) — เลือกถ้าเป็นรายรับ",
-                ["— ไม่ระบุ —"] + list(INCOME_TYPES.keys()),
-                help="ระบบจะใช้ข้อมูลนี้เติมช่องภาษีให้อัตโนมัติในแท็บคำนวณภาษี"
+            # ⭐ จุดสำคัญ: เงินเข้านี้เป็น "เงินได้" (เสียภาษี) หรือไม่?
+            is_income = st.radio(
+                "เงินนี้เป็นเงินได้ที่ต้องเสียภาษีไหม? (เฉพาะรายรับ)",
+                ["✅ ใช่ เป็นเงินได้", "❌ ไม่ใช่เงินได้"],
+                help="เช่น เงินโอนจากญาติ เงินกู้ โอนระหว่างบัญชีตัวเอง = ไม่ใช่เงินได้ ไม่ต้องเสียภาษี"
             )
-            amount = st.number_input("จำนวนเงิน (บาท)", min_value=0.0, step=100.0, format="%.2f")
+            income_type = st.selectbox(
+                "ประเภทเงินได้ (มาตรา 40) — ถ้าเป็นเงินได้",
+                ["— ไม่ระบุ —"] + list(INCOME_TYPES.keys()),
+            )
+            non_income_type = st.selectbox(
+                "ถ้าไม่ใช่เงินได้ — เป็นเงินอะไร?",
+                ["— ไม่ระบุ —"] + list(NON_INCOME_TYPES.keys()),
+            )
         with c3:
+            amount = st.number_input("จำนวนเงิน (บาท)", min_value=0.0, step=100.0, format="%.2f")
             category = st.selectbox("หมวดหมู่บัญชี", [
                 "ขายสินค้า", "ค่าบริการ", "รายได้อื่นๆ",
                 "ซื้อสินค้า/วัตถุดิบ", "ค่าขนส่ง", "ค่าเช่า",
@@ -1417,13 +1644,27 @@ with tab1:
                 st.error("กรุณากรอกจำนวนเงินมากกว่า 0")
             else:
                 it = None if income_type == "— ไม่ระบุ —" else income_type
+                # รายจ่ายไม่ต้องสนใจเรื่องเงินได้
+                if txn_type == "รายจ่าย":
+                    taxable_flag = 1
+                    nit = None
+                else:
+                    taxable_flag = 1 if is_income.startswith("✅") else 0
+                    nit = None if (taxable_flag == 1 or non_income_type == "— ไม่ระบุ —") else non_income_type
+                    if taxable_flag == 0:
+                        it = None  # ไม่ใช่เงินได้ ก็ไม่มีมาตรา 40
+
+                wal = sel_wallet if _wallet_names else None
                 conn = get_conn()
                 conn.execute(
-                    "INSERT INTO transactions (txn_date, txn_type, income_type, category, description, amount, user_id) VALUES (?,?,?,?,?,?,?)",
-                    (txn_date.isoformat(), txn_type, it, category, description, amount, USER)
+                    "INSERT INTO transactions (txn_date, txn_type, income_type, category, description, amount, user_id, wallet, is_taxable, non_income_type) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (txn_date.isoformat(), txn_type, it, category, description, amount, USER, wal, taxable_flag, nit)
                 )
                 conn.commit(); conn.close()
-                st.success(f"✅ บันทึก {txn_type} {amount:,.2f} บาท เรียบร้อย!")
+                if txn_type == "รายรับ" and taxable_flag == 0:
+                    st.success(f"✅ บันทึก {amount:,.2f} บาท (ไม่ใช่เงินได้ — ไม่นำไปคิดภาษี) เรียบร้อย!")
+                else:
+                    st.success(f"✅ บันทึก {txn_type} {amount:,.2f} บาท เรียบร้อย!")
 
     conn = get_conn()
     df = read_sql("SELECT * FROM transactions WHERE user_id=? ORDER BY txn_date DESC, id DESC", conn, params=(USER,))
@@ -1515,8 +1756,18 @@ with tab2:
     inc = read_sql("SELECT * FROM transactions WHERE txn_type='รายรับ' AND user_id=?", conn, params=(USER,))
     conn.close()
 
+    # ⭐ ตัดรายการที่ "ไม่ใช่เงินได้" ออกจากฐานภาษี (เงินโอนญาติ เงินกู้ โอนระหว่างบัญชี ฯลฯ)
+    if not inc.empty:
+        if "is_taxable" not in inc.columns:
+            inc["is_taxable"] = 1
+        inc["is_taxable"] = inc["is_taxable"].fillna(1).astype(int)
+        excluded_amt = inc[inc["is_taxable"] == 0]["amount"].sum()
+        inc = inc[inc["is_taxable"] == 1]
+        if excluded_amt > 0:
+            st.success(f"✅ ระบบตัดเงิน {excluded_amt:,.0f} บาท ที่ไม่ใช่เงินได้ (เงินโอนจากญาติ/เงินกู้/โอนระหว่างบัญชี) ออกจากฐานภาษีแล้ว — คุณไม่ต้องเสียภาษีส่วนนี้")
+
     if inc.empty:
-        st.info("ยังไม่มีรายรับในระบบ — ไปบันทึกที่แท็บ  'บันทึกบัญชี' ก่อน")
+        st.info("ยังไม่มีรายรับที่เป็นเงินได้ในระบบ — ไปบันทึกที่แท็บ 'บันทึกบัญชี' ก่อน")
     else:
         # จัดกลุ่มรายรับตามประเภทเงินได้ที่ติ๊กไว้
         st.markdown("##### 📥 รายรับแยกตามประเภทเงินได้ (ดึงจากที่คุณติ๊กไว้)")
