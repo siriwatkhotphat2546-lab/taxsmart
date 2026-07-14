@@ -321,6 +321,41 @@ def _create_tables_sqlite(conn):
             approved_at TEXT
         )
     """)
+    # ===== น้องกระปุก (Mascot) =====
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mascot (
+            user_id TEXT PRIMARY KEY,
+            name TEXT DEFAULT 'น้องกระปุก',
+            coins INTEGER DEFAULT 0,
+            streak INTEGER DEFAULT 0,
+            last_fed TEXT,
+            outfit TEXT DEFAULT 'ธรรมดา',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # ===== โหมดออมด้วยกัน (Partner Mode) =====
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS partners (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
+            partner TEXT NOT NULL,
+            nickname TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS shared_goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
+            partner TEXT,
+            goal_name TEXT NOT NULL,
+            target_amount REAL NOT NULL,
+            saved_amount REAL DEFAULT 0,
+            deadline TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     # ตารางค่าใช้จ่ายกิจการ (สำหรับ Dashboard เจ้าของ)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS biz_expenses (
@@ -367,6 +402,20 @@ def _create_tables_pg():
         """CREATE TABLE IF NOT EXISTS biz_expenses (
             id SERIAL PRIMARY KEY, exp_date TEXT NOT NULL, category TEXT NOT NULL,
             description TEXT, amount REAL NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS mascot (
+            user_id TEXT PRIMARY KEY, name TEXT DEFAULT 'น้องกระปุก',
+            coins INTEGER DEFAULT 0, streak INTEGER DEFAULT 0, last_fed TEXT,
+            outfit TEXT DEFAULT 'ธรรมดา',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS partners (
+            id SERIAL PRIMARY KEY, owner TEXT NOT NULL, partner TEXT NOT NULL,
+            nickname TEXT, status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS shared_goals (
+            id SERIAL PRIMARY KEY, owner TEXT NOT NULL, partner TEXT,
+            goal_name TEXT NOT NULL, target_amount REAL NOT NULL,
+            saved_amount REAL DEFAULT 0, deadline TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
         """CREATE TABLE IF NOT EXISTS wallets (
             id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,
@@ -1341,11 +1390,86 @@ def calc_wallet_balance(username, wallet_name, opening):
     outflow = df[df.txn_type == "รายจ่าย"]["amount"].sum()
     return float(opening) + inflow - outflow, inflow, outflow
 
-tabD, tabWallet, tab1, tab2, tabCareer, tabShop, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5, tabConsult, tabUpgrade, tabPDPA = st.tabs([
-    "🏠 ภาพรวม (Dashboard)", "👛 กระเป๋าเงิน", "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "👔 ภาษีตามอาชีพ", "🏪 ร้านค้า/ร้านอาหาร",
+
+# =====================================================================
+#  น้องกระปุก (Mascot) — สะท้อนสุขภาพการเงิน
+# =====================================================================
+OUTFITS = {
+    "ธรรมดา": {"emoji": "🐷", "cost": 0, "desc": "น้องกระปุกตัวจริง"},
+    "ผ้าขาวม้า": {"emoji": "🐷🧣", "cost": 50, "desc": "ลุคไทยแท้"},
+    "มงกุฎทอง": {"emoji": "🐷👑", "cost": 150, "desc": "เศรษฐีน้อย"},
+    "หมวกชาวนา": {"emoji": "🐷👒", "cost": 80, "desc": "สายเกษตร"},
+    "แว่นกันแดด": {"emoji": "🐷🕶️", "cost": 100, "desc": "คูลๆ"},
+    "พวงมาลัย": {"emoji": "🐷💐", "cost": 120, "desc": "เฮงๆ รวยๆ"},
+    "ชุดนักบัญชี": {"emoji": "🐷👔", "cost": 200, "desc": "มือโปร"},
+}
+
+def get_mascot(username):
+    conn = get_conn()
+    m = read_sql("SELECT * FROM mascot WHERE user_id=?", conn, params=(username,))
+    if m.empty:
+        conn.execute("INSERT INTO mascot (user_id) VALUES (?)", (username,))
+        conn.commit()
+        m = read_sql("SELECT * FROM mascot WHERE user_id=?", conn, params=(username,))
+    conn.close()
+    return m.iloc[0] if not m.empty else None
+
+def get_mascot_mood(username):
+    """คืน (อีโมจิสถานะ, ชื่อสถานะ, ข้อความ, วันที่ไม่ได้บันทึก)"""
+    conn = get_conn()
+    df = read_sql("SELECT txn_date FROM transactions WHERE user_id=? ORDER BY txn_date DESC", conn, params=(username,))
+    conn.close()
+    if df.empty:
+        return "😴", "รอคุณอยู่", "ยังไม่เคยให้อาหารน้องเลย — บันทึกรายการแรกกันเถอะ!", 999
+    last = pd.to_datetime(df.iloc[0]["txn_date"]).date()
+    days = (date.today() - last).days
+    if days == 0:
+        return "✨", "อิ่มสุขใจ", "วันนี้ได้กินแล้ว น้องมีความสุขมาก! 🎉", 0
+    elif days <= 2:
+        return "😊", "สบายดี", f"น้องยังอิ่มอยู่ (ให้อาหารล่าสุด {days} วันก่อน)", days
+    elif days <= 7:
+        return "💤", "ง่วงนอน", f"น้องเริ่มง่วงแล้ว... ไม่ได้กิน {days} วันแล้วนะ", days
+    else:
+        return "🥺", "คิดถึงคุณ", f"น้องคิดถึงคุณมาก ไม่ได้เจอกัน {days} วันแล้ว กลับมาบันทึกกันเถอะ", days
+
+def feed_mascot(username):
+    """ให้อาหารน้อง (เรียกเมื่อบันทึกรายการ) — เพิ่มเหรียญ + streak"""
+    conn = get_conn()
+    m = read_sql("SELECT * FROM mascot WHERE user_id=?", conn, params=(username,))
+    today = date.today().isoformat()
+    if m.empty:
+        conn.execute("INSERT INTO mascot (user_id, coins, streak, last_fed) VALUES (?,?,?,?)",
+                     (username, 10, 1, today))
+    else:
+        row = m.iloc[0]
+        last_fed = row["last_fed"]
+        coins = int(row["coins"] or 0)
+        streak = int(row["streak"] or 0)
+        if last_fed == today:
+            conn.close()
+            return coins, streak, False  # ให้อาหารแล้ววันนี้
+        # เช็ค streak ต่อเนื่อง
+        if last_fed:
+            try:
+                gap = (date.today() - date.fromisoformat(str(last_fed))).days
+                streak = streak + 1 if gap == 1 else 1
+            except Exception:
+                streak = 1
+        else:
+            streak = 1
+        bonus = 20 if streak % 7 == 0 else 0  # โบนัสครบ 7 วัน
+        coins += 10 + bonus
+        conn.execute("UPDATE mascot SET coins=?, streak=?, last_fed=? WHERE user_id=?",
+                     (coins, streak, today, username))
+    conn.commit(); conn.close()
+    m2 = get_mascot(username)
+    return int(m2["coins"]), int(m2["streak"]), True
+
+tabD, tabMascot, tabWallet, tab1, tab2, tabCareer, tabPartner, tabShop, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5, tabConsult, tabService, tabUpgrade, tabPDPA = st.tabs([
+    "🏠 ภาพรวม (Dashboard)", "🐷 น้องกระปุก", "👛 กระเป๋าเงิน", "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "👔 ภาษีตามอาชีพ", "💞 ออมด้วยกัน", "🏪 ร้านค้า/ร้านอาหาร",
     "📅 ภาษีครึ่งปี (ภ.ง.ด.94)", "🧾 VAT (ภ.พ.30)", "✂️ หัก ณ ที่จ่าย", "📦 ต้นทุนสินค้า",
     "💲 คำนวณราคาขาย", "📊 วิเคราะห์รายเดือน-ปี", "🔮 วางแผนการเงิน", "📖 คลังกฎหมายภาษี",
-    "🤝 ปรึกษาผู้เชี่ยวชาญ", "⭐ อัปเกรดแพ็กเกจ", "🔒 ข้อมูลส่วนตัว/PDPA"
+    "🤝 ปรึกษาผู้เชี่ยวชาญ", "💼 บริการของเรา", "⭐ อัปเกรดแพ็กเกจ", "🔒 ข้อมูลส่วนตัว/PDPA"
 ])
 
 # =====================================================================
@@ -1661,10 +1785,20 @@ with tab1:
                     (txn_date.isoformat(), txn_type, it, category, description, amount, USER, wal, taxable_flag, nit)
                 )
                 conn.commit(); conn.close()
+                # 🐷 ให้อาหารน้องกระปุก
+                new_coins, new_streak, fed = feed_mascot(USER)
+
                 if txn_type == "รายรับ" and taxable_flag == 0:
                     st.success(f"✅ บันทึก {amount:,.2f} บาท (ไม่ใช่เงินได้ — ไม่นำไปคิดภาษี) เรียบร้อย!")
                 else:
                     st.success(f"✅ บันทึก {txn_type} {amount:,.2f} บาท เรียบร้อย!")
+
+                if fed:
+                    if new_streak % 7 == 0 and new_streak > 0:
+                        st.balloons()
+                        st.success(f"🎉 น้องกระปุกได้กินแล้ว! บันทึกต่อเนื่อง {new_streak} วัน — รับโบนัส 20 เหรียญ! (รวม {new_coins} เหรียญ)")
+                    else:
+                        st.info(f"🐷 น้องกระปุกได้กินแล้ว! +10 เหรียญ (รวม {new_coins} เหรียญ) · ต่อเนื่อง {new_streak} วัน")
 
     conn = get_conn()
     df = read_sql("SELECT * FROM transactions WHERE user_id=? ORDER BY txn_date DESC, id DESC", conn, params=(USER,))
@@ -2625,6 +2759,8 @@ with tabShop:
         if total_revenue > 1_800_000:
             st.error(f"🚨 รายได้ {total_revenue:,.0f} เกิน 1.8 ล้าน/ปี — ต้องจดทะเบียน VAT! เมื่อจดแล้วต้องแยกยอดขายกับ VAT 7% ที่เก็บจากลูกค้า ระวังกำไรลดลงถ้าไม่บวกราคาเพิ่ม")
 
+        st.info("💼 **ยื่นภาษีไม่เป็น? ให้เราช่วย** — บริการยื่นภาษีโดยผู้เชี่ยวชาญที่จบบัญชี เริ่มต้น 500 บาท · ดูรายละเอียดที่แท็บ **💼 บริการของเรา** หรือ LINE: 0610950531")
+
         st.caption("⚠️ ประมาณการตามอัตราปีภาษี 2568-2569 | รายได้ต้องใช้ยอดเต็มก่อนหัก GP | ควรเก็บหลักฐานครบถ้วนหากหักตามจริง | ตรวจสอบกับกรมสรรพากรก่อนยื่นจริง")
 
 # =====================================================================
@@ -3088,6 +3224,297 @@ with tabCareer:
         st.markdown(f"- {t}")
 
     st.caption("⚠️ ประมาณการตามกฎหมายปีภาษี 2568 | ควรตรวจสอบกับกรมสรรพากรก่อนยื่นจริง")
+
+# =====================================================================
+#  TAB น้องกระปุก — Mascot สะท้อนสุขภาพการเงิน
+# =====================================================================
+with tabMascot:
+    st.subheader("🐷 น้องกระปุก — เพื่อนคู่ใจเรื่องเงิน")
+
+    m = get_mascot(USER)
+    mood_emo, mood_name, mood_msg, days_away = get_mascot_mood(USER)
+    outfit = m["outfit"] if m is not None else "ธรรมดา"
+    coins = int(m["coins"]) if m is not None else 0
+    streak = int(m["streak"]) if m is not None else 0
+    base_emoji = OUTFITS.get(outfit, OUTFITS["ธรรมดา"])["emoji"]
+
+    # ---------- แสดงน้อง ----------
+    mc1, mc2 = st.columns([1, 2])
+    with mc1:
+        st.markdown(f"""
+        <div style="text-align:center;padding:30px;border-radius:20px;
+        background:linear-gradient(135deg,rgba(127,119,221,0.15),rgba(29,158,117,0.12));
+        border:1px solid rgba(127,119,221,0.3)">
+        <div style="font-size:80px;line-height:1">{base_emoji}{mood_emo}</div>
+        <div style="font-size:18px;font-weight:700;margin-top:10px">{mood_name}</div>
+        <div style="font-size:13px;color:#A8A4C8;margin-top:4px">ชุด: {outfit}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with mc2:
+        st.markdown(f"### {mood_msg}")
+        s1, s2, s3 = st.columns(3)
+        s1.metric("🪙 เหรียญ", f"{coins}")
+        s2.metric("🔥 บันทึกต่อเนื่อง", f"{streak} วัน")
+        s3.metric("📅 ห่างหายไป", f"{days_away if days_away < 999 else '-'} วัน")
+
+        # ให้กำลังใจตามสถานะ
+        if days_away == 0:
+            st.success("💚 เยี่ยมมาก! บันทึกทุกวันทำให้เห็นเงินชัดขึ้น")
+        elif days_away <= 7 and days_away > 2:
+            st.info("💡 กลับมาบันทึกวันนี้ น้องจะดีใจมาก — และคุณจะไม่ลืมว่าเงินไปไหน")
+        elif days_away > 7:
+            st.warning("🌱 ไม่เป็นไรนะ เริ่มใหม่ได้เสมอ — บันทึกวันนี้แค่รายการเดียวก็ยังดี")
+
+    # ---------- น้องพูดข้อมูลจริง ----------
+    st.divider()
+    st.markdown("##### 💬 น้องกระปุกมีอะไรจะบอก")
+    conn = get_conn()
+    df_m = read_sql("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
+    conn.close()
+
+    if df_m.empty:
+        st.info("🐷 \"เริ่มบันทึกรายการแรกกันเถอะ! แล้วเราจะบอกได้ว่าเงินคุณไปไหนบ้าง\"")
+    else:
+        df_m["txn_date"] = pd.to_datetime(df_m["txn_date"], errors="coerce")
+        inc_m = df_m[df_m.txn_type == "รายรับ"]["amount"].sum()
+        exp_m = df_m[df_m.txn_type == "รายจ่าย"]["amount"].sum()
+        says = []
+        if exp_m > inc_m:
+            says.append(f"🐷 \"เดือนนี้จ่ายมากกว่ารับ {exp_m-inc_m:,.0f} บาทนะ ลองดูว่าตัดอะไรได้บ้างไหม\"")
+        elif inc_m > 0:
+            save_rate = (inc_m - exp_m) / inc_m * 100
+            says.append(f"🐷 \"คุณเก็บเงินได้ {save_rate:.0f}% ของรายรับ {'เก่งมาก!' if save_rate >= 20 else 'ลองเพิ่มอีกนิดนะ'}\"")
+        exp_only = df_m[df_m.txn_type == "รายจ่าย"]
+        if not exp_only.empty:
+            top_cat = exp_only.groupby("category")["amount"].sum().idxmax()
+            top_amt = exp_only.groupby("category")["amount"].sum().max()
+            says.append(f"🐷 \"หมวดที่จ่ายเยอะสุดคือ '{top_cat}' รวม {top_amt:,.0f} บาท\"")
+        if streak >= 7:
+            says.append(f"🐷 \"คุณบันทึกต่อเนื่อง {streak} วันแล้ว! นิสัยดีมาก 🎉\"")
+        for s in says:
+            st.markdown(f"> {s}")
+
+    # ---------- ร้านค้าแต่งตัว ----------
+    st.divider()
+    st.markdown("##### 👕 ร้านแต่งตัวน้อง")
+    st.caption(f"คุณมี {coins} เหรียญ — ได้เหรียญจากการบันทึกรายการ (วันละ 10 เหรียญ, ครบ 7 วันติดรับโบนัส 20)")
+
+    ocols = st.columns(4)
+    for i, (oname, oinfo) in enumerate(OUTFITS.items()):
+        with ocols[i % 4]:
+            owned = (oname == outfit)
+            can_buy = coins >= oinfo["cost"]
+            st.markdown(f"<div style='text-align:center;font-size:36px'>{oinfo['emoji']}</div>", unsafe_allow_html=True)
+            st.caption(f"**{oname}**\n\n{oinfo['desc']}")
+            if owned:
+                st.success("✅ ใส่อยู่")
+            elif oinfo["cost"] == 0 or can_buy:
+                if st.button(f"🪙 {oinfo['cost']}", key=f"buy_{oname}", use_container_width=True):
+                    conn = get_conn()
+                    new_coins = coins - oinfo["cost"]
+                    conn.execute("UPDATE mascot SET outfit=?, coins=? WHERE user_id=?",
+                                 (oname, new_coins, USER))
+                    conn.commit(); conn.close()
+                    st.success(f"เปลี่ยนชุดเป็น {oname} แล้ว!")
+                    st.rerun()
+            else:
+                st.caption(f"🔒 ต้องมี {oinfo['cost']} เหรียญ")
+
+    st.caption("💡 น้องกระปุกช่วยให้คุณกลับมาบันทึกทุกวัน — เพราะการเห็นเงินชัดเริ่มจากการจดทุกบาท")
+
+# =====================================================================
+#  TAB ออมด้วยกัน — Partner Mode (คู่รัก/เพื่อน/ครอบครัว)
+# =====================================================================
+with tabPartner:
+    st.subheader("💞 ออมด้วยกัน")
+    st.caption("ตั้งเป้าหมายการเงินร่วมกับคนที่คุณไว้ใจ — คู่รัก คู่ชีวิต เพื่อน หรือครอบครัว")
+
+    conn = get_conn()
+    my_partners = read_sql("SELECT * FROM partners WHERE owner=? OR partner=?", conn, params=(USER, USER))
+    my_goals = read_sql("SELECT * FROM shared_goals WHERE owner=? OR partner=?", conn, params=(USER, USER))
+    conn.close()
+
+    # ---------- เชิญคู่ ----------
+    with st.expander("➕ เชิญคนมาออมด้วยกัน", expanded=my_partners.empty):
+        st.info("💡 อีกฝ่ายต้องสมัครสมาชิกในระบบก่อน แล้วคุณใส่ชื่อผู้ใช้ของเขา")
+        with st.form("partner_form", clear_on_submit=True):
+            pf1, pf2 = st.columns(2)
+            with pf1:
+                p_user = st.text_input("ชื่อผู้ใช้ของอีกฝ่าย")
+            with pf2:
+                p_nick = st.text_input("เรียกเขาว่าอะไร", placeholder="เช่น ที่รัก, เพื่อนซี้")
+            if st.form_submit_button("ส่งคำเชิญ", use_container_width=True):
+                if p_user.strip() == USER:
+                    st.error("เชิญตัวเองไม่ได้นะ 😅")
+                elif p_user.strip():
+                    conn = get_conn()
+                    chk = read_sql("SELECT username FROM users WHERE username=?", conn, params=(p_user.strip(),))
+                    if chk.empty:
+                        st.error("ไม่พบชื่อผู้ใช้นี้ — ให้เขาสมัครสมาชิกก่อน")
+                    else:
+                        conn.execute("INSERT INTO partners (owner, partner, nickname, status) VALUES (?,?,?,?)",
+                                     (USER, p_user.strip(), p_nick.strip() or p_user.strip(), "active"))
+                        conn.commit()
+                        st.success(f"✅ เชื่อมกับ {p_user} แล้ว! ตอนนี้ตั้งเป้าหมายร่วมกันได้")
+                        st.rerun()
+                    conn.close()
+                else:
+                    st.error("กรุณากรอกชื่อผู้ใช้")
+
+    if my_partners.empty:
+        st.info("ยังไม่มีคู่ออม — เชิญคนที่คุณไว้ใจมาตั้งเป้าหมายด้วยกัน")
+    else:
+        st.markdown("##### 👥 คู่ออมของคุณ")
+        for _, p in my_partners.iterrows():
+            other = p["partner"] if p["owner"] == USER else p["owner"]
+            nick = p["nickname"] or other
+            st.markdown(f"- 💞 **{nick}** ({other})")
+
+    # ---------- เป้าหมายร่วม ----------
+    st.divider()
+    st.markdown("##### 🎯 เป้าหมายร่วม")
+
+    with st.expander("➕ ตั้งเป้าหมายใหม่"):
+        with st.form("goal_form", clear_on_submit=True):
+            gf1, gf2 = st.columns(2)
+            with gf1:
+                g_name = st.text_input("ชื่อเป้าหมาย", placeholder="เช่น เก็บเงินแต่งงาน, ดาวน์บ้าน")
+                g_target = st.number_input("เป้าหมาย (บาท)", min_value=0.0, step=10000.0, format="%.2f")
+            with gf2:
+                partner_opts = ["(ออมคนเดียว)"]
+                if not my_partners.empty:
+                    for _, p in my_partners.iterrows():
+                        other = p["partner"] if p["owner"] == USER else p["owner"]
+                        partner_opts.append(other)
+                g_partner = st.selectbox("ออมกับใคร", partner_opts)
+                g_deadline = st.text_input("กำหนดถึงเมื่อไหร่ (YYYY-MM-DD)", placeholder="2027-12-31")
+            if st.form_submit_button("สร้างเป้าหมาย", use_container_width=True):
+                if g_name.strip() and g_target > 0:
+                    conn = get_conn()
+                    conn.execute(
+                        "INSERT INTO shared_goals (owner, partner, goal_name, target_amount, deadline) VALUES (?,?,?,?,?)",
+                        (USER, None if g_partner == "(ออมคนเดียว)" else g_partner,
+                         g_name.strip(), float(g_target), g_deadline.strip() or None)
+                    )
+                    conn.commit(); conn.close()
+                    st.success("✅ สร้างเป้าหมายแล้ว!")
+                    st.rerun()
+                else:
+                    st.error("กรุณากรอกชื่อเป้าหมายและจำนวนเงิน")
+
+    if my_goals.empty:
+        st.info("ยังไม่มีเป้าหมาย — ตั้งเป้าหมายแรกกันเถอะ")
+    else:
+        for _, g in my_goals.iterrows():
+            saved = float(g["saved_amount"] or 0)
+            target = float(g["target_amount"])
+            pct = min(saved / target * 100, 100) if target > 0 else 0
+            with st.container():
+                gc1, gc2 = st.columns([3, 1])
+                with gc1:
+                    partner_txt = f" (ร่วมกับ {g['partner']})" if g["partner"] else " (คนเดียว)"
+                    st.markdown(f"**🎯 {g['goal_name']}**{partner_txt}")
+                    st.progress(pct / 100)
+                    st.caption(f"{saved:,.0f} / {target:,.0f} บาท ({pct:.0f}%)" +
+                               (f" · ถึง {g['deadline']}" if g["deadline"] else ""))
+                with gc2:
+                    add_amt = st.number_input("เพิ่มเงินออม", min_value=0.0, step=500.0,
+                                              key=f"add_{g['id']}", format="%.0f", label_visibility="collapsed")
+                    if st.button("💰 ออมเพิ่ม", key=f"save_{g['id']}", use_container_width=True):
+                        if add_amt > 0:
+                            conn = get_conn()
+                            conn.execute("UPDATE shared_goals SET saved_amount=? WHERE id=?",
+                                         (saved + add_amt, int(g["id"])))
+                            conn.commit(); conn.close()
+                            st.success(f"ออมเพิ่ม {add_amt:,.0f} บาท!")
+                            st.rerun()
+                if pct >= 100:
+                    st.success("🎉 ถึงเป้าหมายแล้ว! ยินดีด้วย")
+                st.divider()
+
+    st.caption("🔒 ความเป็นส่วนตัว: ระบบแชร์เฉพาะเป้าหมายร่วม ไม่แชร์รายการส่วนตัวของคุณ")
+
+# =====================================================================
+#  TAB บริการของเรา — หารายได้จากบริการ (วางระบบ ERP / ทำบัญชี / ยื่นภาษี)
+# =====================================================================
+with tabService:
+    st.subheader("💼 บริการของเรา")
+    st.markdown("นอกจากเครื่องมือในระบบ เรายังรับงานบริการด้านบัญชี ภาษี และวางระบบ โดยผู้เชี่ยวชาญที่จบบัญชีโดยตรง")
+
+    st.divider()
+    st.markdown("##### 📋 บริการที่รับ")
+
+    sv1, sv2 = st.columns(2)
+    with sv1:
+        st.markdown("""
+        **🧾 ยื่นภาษีให้**
+        - ภ.ง.ด.94 (ภาษีครึ่งปี) — เริ่มต้น 500 บาท
+        - ภ.ง.ด.90/91 (ภาษีประจำปี) — เริ่มต้น 800 บาท
+        - ภ.พ.30 (VAT รายเดือน) — เริ่มต้น 500 บาท/เดือน
+
+        **📊 ทำบัญชีรายเดือน**
+        - บุคคลธรรมดา/ร้านค้า — เริ่มต้น 2,000 บาท/เดือน
+        - นิติบุคคล — เริ่มต้น 4,000 บาท/เดือน
+        """)
+    with sv2:
+        st.markdown("""
+        **⚙️ วางระบบบัญชี (ERP)**
+        - SAP Business One — ประเมินตามขอบเขตงาน
+        - PEAK / FlowAccount — เริ่มต้น 8,000 บาท
+        - Express — เริ่มต้น 5,000 บาท
+        - ย้ายข้อมูลระบบเก่า → ใหม่ — ประเมินตามปริมาณ
+
+        **🎓 สอน/เทรนนิ่ง**
+        - สอนใช้โปรแกรมบัญชี — 2,000 บาท/วัน
+        """)
+
+    st.info("💡 **ประสบการณ์:** วางระบบ SAP Business One, PEAK, FlowAccount, Express มาแล้ว พร้อมความรู้บัญชีและภาษีเชิงลึก")
+
+    st.divider()
+    st.markdown("##### 📮 สนใจบริการ — ติดต่อเรา")
+
+    with st.form("service_form", clear_on_submit=True):
+        sf1, sf2 = st.columns(2)
+        with sf1:
+            sv_type = st.selectbox("บริการที่สนใจ", [
+                "ยื่นภาษี ภ.ง.ด.94 (ครึ่งปี)",
+                "ยื่นภาษีประจำปี ภ.ง.ด.90/91",
+                "ยื่น VAT ภ.พ.30",
+                "ทำบัญชีรายเดือน",
+                "วางระบบ SAP Business One",
+                "วางระบบ PEAK / FlowAccount",
+                "วางระบบ Express",
+                "ย้ายข้อมูลระบบบัญชี",
+                "สอนใช้โปรแกรมบัญชี",
+                "อื่นๆ",
+            ])
+        with sf2:
+            sv_contact = st.text_input("ช่องทางติดต่อกลับ (เบอร์/LINE/อีเมล)")
+        sv_detail = st.text_area("รายละเอียดงาน", height=100,
+                                 placeholder="เช่น ร้านอาหาร 2 สาขา อยากวางระบบ PEAK และให้ทำบัญชีรายเดือน")
+        if st.form_submit_button("📨 ส่งคำขอ", use_container_width=True):
+            if sv_contact.strip() and sv_detail.strip():
+                conn = get_conn()
+                conn.execute(
+                    "INSERT INTO consult_requests (user_id, service, contact, detail) VALUES (?,?,?,?)",
+                    (USER, sv_type, sv_contact.strip(), sv_detail.strip())
+                )
+                conn.commit(); conn.close()
+                st.success("✅ ส่งคำขอเรียบร้อย! เราจะติดต่อกลับภายใน 24 ชม.")
+            else:
+                st.error("กรุณากรอกช่องทางติดต่อและรายละเอียด")
+
+    st.divider()
+    sc1, sc2, sc3 = st.columns(3)
+    with sc1:
+        st.markdown("[💬 Facebook](https://www.facebook.com/siriwat.khotphat.2024/?locale=th_TH)")
+    with sc2:
+        st.markdown("**📱 LINE:** 0610950531")
+    with sc3:
+        st.markdown("**☎️ โทร:** 098-667-3680")
+
+    st.caption("⚠️ ราคาเป็นราคาเริ่มต้น อาจปรับตามความซับซ้อนของงาน — ปรึกษาฟรี ไม่มีค่าใช้จ่าย")
 
 # =====================================================================
 #  TAB 5 — คลังกฎหมายภาษี
