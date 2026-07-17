@@ -2531,91 +2531,181 @@ with tab9:
 #  TAB 10 — คำนวณราคาขาย + เทียบราคา (ช่วยพ่อค้าแม่ค้าตั้งราคา)
 # =====================================================================
 with tab10:
-    st.subheader("💲 คำนวณราคาขายและเทียบราคา")
-    st.caption("ใส่ต้นทุน แล้วระบบช่วยตั้งราคาขายตามกำไรที่ต้องการ + เทียบหลายวิธีให้ตัดสินใจ")
+    st.subheader("💲 คำนวณราคาขายจากวัตถุดิบ")
+    st.caption("กรอกวัตถุดิบทีละอย่าง → ระบบรวมต้นทุน หารต่อกล่อง แล้วแนะนำราคาขายตามกำไรที่อยากได้")
 
-    st.markdown("##### 📥 ใส่ข้อมูลต้นทุน")
-    pc1, pc2 = st.columns(2)
-    with pc1:
-        product_name = st.text_input("ชื่อสินค้า (ไม่บังคับ)", placeholder="เช่น เสื้อยืด")
-        cost = st.number_input("ต้นทุนสินค้า/หน่วย (บาท)", min_value=0.0, step=10.0, format="%.2f")
-        other_cost = st.number_input("ต้นทุนแฝงต่อหน่วย (ค่าส่ง/แพ็ค/ค่าธรรมเนียม)", min_value=0.0, step=5.0, format="%.2f",
-                                     help="ค่าใช้จ่ายอื่นต่อชิ้น เช่น ค่ากล่อง ค่าส่ง ค่าธรรมเนียมแพลตฟอร์ม")
-    with pc2:
-        target_margin = st.slider("กำไรที่ต้องการ (% ของราคาขาย)", 0, 90, 30,
-                                  help="กำไรขั้นต้นคิดเป็น % ของราคาขาย")
-        vat_included = st.checkbox("บวก VAT 7% ในราคาขาย", value=False)
+    st.markdown("##### 1️⃣ ใส่ชื่อสินค้าและจำนวนที่ทำได้")
+    rc1, rc2, rc3 = st.columns(3)
+    with rc1:
+        recipe_name = st.text_input("ชื่อสินค้า", placeholder="เช่น หมี่ไก่ฉีก")
+    with rc2:
+        batch_yield = st.number_input("ทำได้กี่กล่อง/ชิ้น ต่อ 1 รอบ", min_value=1, value=10, step=1,
+                                      help="วัตถุดิบที่กรอกทั้งหมด ทำได้ทั้งหมดกี่กล่อง")
+    with rc3:
+        yield_unit = st.text_input("หน่วย", value="กล่อง")
 
-    total_cost = cost + other_cost
+    st.markdown("##### 2️⃣ ใส่วัตถุดิบทีละอย่าง")
+    st.caption("กรอกชื่อวัตถุดิบ + ราคาที่ซื้อมา (ต่อรอบการทำ) เช่น หมี่ 1 ห่อ 25 บาท, ไก่ 1 กก. 80 บาท")
 
-    if total_cost <= 0:
-        st.info("กรอกต้นทุนสินค้าก่อน เพื่อให้ระบบคำนวณราคาขายแนะนำ")
+    # ใช้ session state เก็บรายการวัตถุดิบ
+    if "recipe_ingredients" not in st.session_state:
+        st.session_state.recipe_ingredients = [
+            {"name": "", "price": 0.0},
+            {"name": "", "price": 0.0},
+            {"name": "", "price": 0.0},
+        ]
+
+    ing_cols = st.columns([3, 2, 1])
+    ing_cols[0].markdown("**วัตถุดิบ**")
+    ing_cols[1].markdown("**ราคาที่ซื้อมา (บาท)**")
+    ing_cols[2].markdown("**ลบ**")
+
+    total_ingredient_cost = 0.0
+    for i, ing in enumerate(st.session_state.recipe_ingredients):
+        c1, c2, c3 = st.columns([3, 2, 1])
+        with c1:
+            ing["name"] = st.text_input(f"ing_name_{i}", value=ing["name"],
+                                        placeholder="เช่น หมี่, ไก่, น้ำมัน", label_visibility="collapsed", key=f"ing_n_{i}")
+        with c2:
+            ing["price"] = st.number_input(f"ing_price_{i}", value=float(ing["price"]), min_value=0.0, step=5.0,
+                                           format="%.2f", label_visibility="collapsed", key=f"ing_p_{i}")
+        with c3:
+            if len(st.session_state.recipe_ingredients) > 1:
+                if st.button("🗑️", key=f"del_ing_{i}"):
+                    st.session_state.recipe_ingredients.pop(i)
+                    st.rerun()
+        total_ingredient_cost += ing["price"]
+
+    ac1, ac2 = st.columns(2)
+    with ac1:
+        if st.button("➕ เพิ่มวัตถุดิบ", use_container_width=True):
+            st.session_state.recipe_ingredients.append({"name": "", "price": 0.0})
+            st.rerun()
+    with ac2:
+        if st.button("🔄 ล้างทั้งหมด", use_container_width=True):
+            st.session_state.recipe_ingredients = [{"name": "", "price": 0.0}]
+            st.rerun()
+
+    # ต้นทุนแฝงเพิ่มเติม
+    st.markdown("##### 3️⃣ ต้นทุนแฝง (ต่อรอบการทำ)")
+    hc1, hc2, hc3 = st.columns(3)
+    with hc1:
+        packaging_cost = st.number_input("ค่าบรรจุภัณฑ์รวม (กล่อง/ถุง/ช้อน)", min_value=0.0, step=5.0, format="%.2f")
+    with hc2:
+        gas_cost = st.number_input("ค่าแก๊ส/ไฟ/น้ำ (ต่อรอบ)", min_value=0.0, step=5.0, format="%.2f")
+    with hc3:
+        labor_cost = st.number_input("ค่าแรงตัวเอง (ต่อรอบ)", min_value=0.0, step=10.0, format="%.2f",
+                                     help="ตีราคาเวลาที่ใช้ทำ เช่น ทำ 2 ชม. คิด 100 บาท")
+
+    # ===== คำนวณ =====
+    total_batch_cost = total_ingredient_cost + packaging_cost + gas_cost + labor_cost
+    cost_per_unit = total_batch_cost / batch_yield if batch_yield > 0 else 0
+
+    if total_batch_cost <= 0:
+        st.info("👆 กรอกวัตถุดิบและราคาก่อน เพื่อให้ระบบคำนวณต้นทุนและราคาขาย")
     else:
-        # ===== วิธีที่ 1: ตั้งราคาจาก % กำไรของราคาขาย (margin) =====
-        # ราคาขาย = ต้นทุน / (1 - margin%)
-        if target_margin < 100:
-            price_margin = total_cost / (1 - target_margin/100)
+        st.divider()
+        st.markdown(f"##### 📊 ต้นทุน{' — ' + recipe_name if recipe_name else ''}")
+        tc1, tc2, tc3 = st.columns(3)
+        tc1.metric("ต้นทุนรวมทั้งรอบ", f"{total_batch_cost:,.2f} บาท")
+        tc2.metric(f"ทำได้", f"{batch_yield} {yield_unit}")
+        tc3.metric(f"ต้นทุนต่อ{yield_unit}", f"{cost_per_unit:,.2f} บาท")
+
+        # แยกให้เห็นว่าต้นทุนมาจากไหน
+        with st.expander("ดูรายละเอียดต้นทุน"):
+            breakdown = []
+            for ing in st.session_state.recipe_ingredients:
+                if ing["name"] and ing["price"] > 0:
+                    breakdown.append({"รายการ": ing["name"], "ราคา (บาท)": f"{ing['price']:,.2f}"})
+            if packaging_cost > 0:
+                breakdown.append({"รายการ": "ค่าบรรจุภัณฑ์", "ราคา (บาท)": f"{packaging_cost:,.2f}"})
+            if gas_cost > 0:
+                breakdown.append({"รายการ": "ค่าแก๊ส/ไฟ/น้ำ", "ราคา (บาท)": f"{gas_cost:,.2f}"})
+            if labor_cost > 0:
+                breakdown.append({"รายการ": "ค่าแรง", "ราคา (บาท)": f"{labor_cost:,.2f}"})
+            st.dataframe(pd.DataFrame(breakdown), use_container_width=True, hide_index=True)
+
+        # ===== ตั้งราคาขาย =====
+        st.divider()
+        st.markdown("##### 4️⃣ อยากได้กำไรกี่ %")
+        mg1, mg2 = st.columns(2)
+        with mg1:
+            profit_pct = st.slider("กำไรที่ต้องการ (% ของราคาขาย)", 0, 80, 40,
+                                   help="เช่น 40% หมายถึง ในราคาขาย 100 บาท เป็นกำไร 40 บาท")
+        with mg2:
+            round_price = st.checkbox("ปัดราคาให้สวย (ลงท้าย 0 หรือ 5)", value=True)
+
+        # ราคาขาย = ต้นทุน / (1 - กำไr%)
+        if profit_pct < 100:
+            suggested_price = cost_per_unit / (1 - profit_pct/100)
         else:
-            price_margin = total_cost
+            suggested_price = cost_per_unit
 
-        # ===== วิธีที่ 2: ตั้งราคาจาก % บวกเพิ่มจากต้นทุน (markup) =====
-        # ใช้ markup เท่ากับ target ที่ผู้ใช้ตั้ง เพื่อเทียบให้เห็นต่าง
-        price_markup = total_cost * (1 + target_margin/100)
-
-        # ===== วิธีที่ 3: ราคาที่นิยม (ลงท้าย 9) =====
+        # ปัดราคาให้สวย
         import math
-        price_psych = math.ceil(price_margin/10)*10 - 1
-        if price_psych < total_cost:
-            price_psych = math.ceil(price_margin)
+        display_price = suggested_price
+        if round_price:
+            display_price = math.ceil(suggested_price / 5) * 5  # ปัดขึ้นเป็นหลัก 5
 
-        def add_vat(p):
-            return p * 1.07 if vat_included else p
-
-        rows = []
-        for name, p, desc in [
-            ("ตั้งจากกำไร % ของราคาขาย (Margin)", price_margin, f"กำไร {target_margin}% ของราคาขาย"),
-            ("ตั้งจากบวกเพิ่มจากต้นทุน (Markup)", price_markup, f"บวก {target_margin}% จากต้นทุน"),
-            ("ราคาจูงใจ (ลงท้าย 9)", add_vat(price_psych)/1.07 if vat_included else price_psych, "ปัดให้ลงท้าย 9 ดึงดูดลูกค้า"),
-        ]:
-            final_price = add_vat(p)
-            profit = final_price/(1.07 if vat_included else 1) - total_cost
-            margin_pct = (profit / (final_price/(1.07 if vat_included else 1))) * 100 if final_price > 0 else 0
-            rows.append({
-                "วิธีตั้งราคา": name,
-                "ราคาขาย (บาท)": f"{final_price:,.2f}",
-                "กำไร/ชิ้น (บาท)": f"{profit:,.2f}",
-                "อัตรากำไร": f"{margin_pct:.1f}%",
-                "หมายเหตุ": desc,
-            })
+        actual_profit = display_price - cost_per_unit
+        actual_margin = (actual_profit / display_price * 100) if display_price > 0 else 0
 
         st.divider()
-        st.markdown(f"##### 📊 ราคาขายแนะนำ" + (f" — {product_name}" if product_name else ""))
-        m1, m2, m3 = st.columns(3)
-        m1.metric("ต้นทุนรวม/ชิ้น", f"{total_cost:,.2f}")
-        m2.metric("ราคาขายแนะนำ", f"{add_vat(price_margin):,.2f}")
-        m3.metric("กำไร/ชิ้น", f"{add_vat(price_margin)/(1.07 if vat_included else 1) - total_cost:,.2f}")
+        st.markdown("##### 💰 ราคาขายแนะนำ")
+        pr1, pr2, pr3 = st.columns(3)
+        pr1.metric(f"ราคาขายต่อ{yield_unit}", f"{display_price:,.0f} บาท")
+        pr2.metric(f"กำไรต่อ{yield_unit}", f"{actual_profit:,.2f} บาท")
+        pr3.metric("อัตรากำไรจริง", f"{actual_margin:.0f}%")
 
-        st.markdown("##### 🔍 เทียบหลายวิธีตั้งราคา")
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        # กำไรถ้าขายหมดทั้งรอบ
+        total_revenue = display_price * batch_yield
+        total_profit = total_revenue - total_batch_cost
+        st.success(f"💡 ถ้าขายหมด {batch_yield} {yield_unit} → รายได้ {total_revenue:,.0f} บาท, กำไร {total_profit:,.0f} บาท")
 
-        # จุดคุ้มทุน
+        # ===== เทียบราคาตลาด (แบบ B: แนะนำช่วง + เตือนเช็คเอง) =====
         st.divider()
-        st.markdown("##### 🎯 วิเคราะห์เพิ่มเติม")
-        bep1, bep2 = st.columns(2)
-        with bep1:
-            fixed_cost = st.number_input("ค่าใช้จ่ายคงที่ต่อเดือน (ค่าเช่า/เงินเดือน)", min_value=0.0, step=500.0, format="%.2f",
-                                         help="ใส่เพื่อคำนวณว่าต้องขายกี่ชิ้นถึงคุ้มทุน")
-        with bep2:
-            if fixed_cost > 0:
-                profit_per_unit = add_vat(price_margin)/(1.07 if vat_included else 1) - total_cost
-                if profit_per_unit > 0:
-                    bep_units = fixed_cost / profit_per_unit
-                    st.metric("ต้องขายกี่ชิ้น/เดือนถึงคุ้มทุน", f"{bep_units:,.0f} ชิ้น")
-                else:
-                    st.warning("กำไรต่อชิ้นเป็น 0 หรือติดลบ — ตั้งราคาใหม่")
+        st.markdown("##### 🔍 เทียบกับราคาตลาด")
+        st.caption("ระบบแนะนำช่วงราคาตามต้นทุน — ควรไปเช็คราคาคู่แข่งจริงใน Grab/Shopee/ตลาดแถวบ้านประกอบ")
 
-        st.info("💡 Margin (กำไรจากราคาขาย) กับ Markup (บวกจากต้นทุน) ต่างกัน! เช่น ต้นทุน 100 บวก markup 30% = ขาย 130 แต่กำไรจริงแค่ 23% ของราคาขาย ระบบคำนวณให้เห็นชัดทั้งสองแบบ")
-        st.caption("⚠️ ราคาแนะนำเป็นแนวทาง ควรพิจารณาราคาตลาดและคู่แข่งประกอบ")
+        # ช่วงราคาแนะนำ (กำไร 30-50%)
+        price_low = cost_per_unit / (1 - 0.30)   # กำไร 30%
+        price_high = cost_per_unit / (1 - 0.50)  # กำไร 50%
+        if round_price:
+            price_low = math.ceil(price_low / 5) * 5
+            price_high = math.ceil(price_high / 5) * 5
+
+        rng1, rng2, rng3 = st.columns(3)
+        rng1.metric("💚 ราคาแข่งขันได้ (กำไร 30%)", f"{price_low:,.0f} บาท")
+        rng2.metric("⭐ ราคาแนะนำ (กำไร 40%)", f"{display_price:,.0f} บาท")
+        rng3.metric("💎 ราคาพรีเมียม (กำไร 50%)", f"{price_high:,.0f} บาท")
+
+        st.warning(f"""
+📌 **ก่อนตั้งราคาจริง ลองเช็คตลาด:**
+- เปิด **Grab Food / LINE MAN** ค้นหา "{recipe_name or 'สินค้าคล้ายกัน'}" ดูว่าร้านอื่นขายกี่บาท
+- เปิด **Shopee / Lazada** ดูราคาสินค้าใกล้เคียง
+- ถ้าราคาแนะนำ **สูงกว่าตลาดมาก** → ลดกำไร หรือหาวิธีลดต้นทุน
+- ถ้าราคาแนะนำ **ต่ำกว่าตลาด** → คุณตั้งราคาสูงขึ้นได้ กำไรเพิ่ม!
+""")
+
+        # ===== ขายผ่าน Delivery ต้องบวกค่า GP =====
+        st.divider()
+        st.markdown("##### 🛵 ถ้าขายผ่าน Grab/LINE MAN (มีค่า GP)")
+        st.caption("แพลตฟอร์มเดลิเวอรีหักค่าคอมมิชชั่น (GP) ประมาณ 30-35% ต้องบวกในราคาขายเพื่อไม่ให้ขาดทุน")
+        gp1, gp2 = st.columns(2)
+        with gp1:
+            gp_pct = st.slider("ค่า GP ที่แพลตฟอร์มหัก (%)", 0, 40, 30)
+        with gp2:
+            # ราคาบนแอป = ราคาที่อยากได้ / (1 - GP%)
+            if gp_pct < 100:
+                delivery_price = display_price / (1 - gp_pct/100)
+                if round_price:
+                    delivery_price = math.ceil(delivery_price / 5) * 5
+                st.metric("ราคาที่ควรตั้งบนแอป", f"{delivery_price:,.0f} บาท",
+                          help="ตั้งราคานี้บนแอป เพื่อให้หลังหัก GP แล้วยังได้กำไรเท่าที่ต้องการ")
+
+        st.info(f"💡 ขายหน้าร้าน {display_price:,.0f} บาท แต่บน Grab ควรตั้ง {delivery_price:,.0f} บาท (เพราะโดนหัก GP {gp_pct}%) — ลูกค้าจ่ายแพงขึ้น แต่คุณได้กำไรเท่าเดิม")
+
+        st.caption("⚠️ ราคาแนะนำเป็นแนวทางจากต้นทุน ควรพิจารณาราคาตลาดและกำลังซื้อของลูกค้าประกอบเสมอ")
 
 # =====================================================================
 #  TAB ร้านค้า/ร้านอาหาร — คำนวณภาษีเฉพาะร้านค้า (เทียบวิธีหัก + เทียบ 2 วิธีภาษี)
