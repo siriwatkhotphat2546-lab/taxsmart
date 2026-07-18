@@ -4,3 +4,4 @@ openpyxl
 reportlab
 sqlalchemy
 pg8000
+plotly
