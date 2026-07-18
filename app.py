@@ -321,11 +321,11 @@ def _create_tables_sqlite(conn):
             approved_at TEXT
         )
     """)
-    # ===== น้องกระปุก (Mascot) =====
+    # ===== ยายนึก (Mascot) =====
     conn.execute("""
         CREATE TABLE IF NOT EXISTS mascot (
             user_id TEXT PRIMARY KEY,
-            name TEXT DEFAULT 'น้องกระปุก',
+            name TEXT DEFAULT 'ยายนึก',
             coins INTEGER DEFAULT 0,
             streak INTEGER DEFAULT 0,
             last_fed TEXT,
@@ -404,7 +404,7 @@ def _create_tables_pg():
             description TEXT, amount REAL NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
         """CREATE TABLE IF NOT EXISTS mascot (
-            user_id TEXT PRIMARY KEY, name TEXT DEFAULT 'น้องกระปุก',
+            user_id TEXT PRIMARY KEY, name TEXT DEFAULT 'ยายนึก',
             coins INTEGER DEFAULT 0, streak INTEGER DEFAULT 0, last_fed TEXT,
             outfit TEXT DEFAULT 'ธรรมดา',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
@@ -1392,10 +1392,10 @@ def calc_wallet_balance(username, wallet_name, opening):
 
 
 # =====================================================================
-#  น้องกระปุก (Mascot) — สะท้อนสุขภาพการเงิน
+#  ยายนึก (Mascot) — สะท้อนสุขภาพการเงิน
 # =====================================================================
 OUTFITS = {
-    "ธรรมดา": {"emoji": "🐷", "cost": 0, "desc": "น้องกระปุกตัวจริง"},
+    "ธรรมดา": {"emoji": "🐷", "cost": 0, "desc": "ยายนึกตัวจริง"},
     "ผ้าขาวม้า": {"emoji": "🐷🧣", "cost": 50, "desc": "ลุคไทยแท้"},
     "มงกุฎทอง": {"emoji": "🐷👑", "cost": 150, "desc": "เศรษฐีน้อย"},
     "หมวกชาวนา": {"emoji": "🐷👒", "cost": 80, "desc": "สายเกษตร"},
@@ -1420,17 +1420,17 @@ def get_mascot_mood(username):
     df = read_sql("SELECT txn_date FROM transactions WHERE user_id=? ORDER BY txn_date DESC", conn, params=(username,))
     conn.close()
     if df.empty:
-        return "😴", "รอคุณอยู่", "ยังไม่เคยให้อาหารน้องเลย — บันทึกรายการแรกกันเถอะ!", 999
+        return "👵", "ยายรอหลานอยู่", "ยายนึกยังรอหลานมาบันทึกครั้งแรกอยู่เลย มาเริ่มกันนะลูก", 999
     last = pd.to_datetime(df.iloc[0]["txn_date"]).date()
     days = (date.today() - last).days
     if days == 0:
-        return "✨", "อิ่มสุขใจ", "วันนี้ได้กินแล้ว น้องมีความสุขมาก! 🎉", 0
+        return "😊", "ยายภูมิใจ", "วันนี้หลานบันทึกแล้ว ยายนึกภูมิใจในตัวหลานมากเลย!", 0
     elif days <= 2:
-        return "😊", "สบายดี", f"น้องยังอิ่มอยู่ (ให้อาหารล่าสุด {days} วันก่อน)", days
+        return "🙂", "ยายสดใส", f"ยายนึกสบายใจ หลานยังจำที่จะดูแลเงินอยู่ (ล่าสุด {days} วันก่อน)", days
     elif days <= 7:
-        return "💤", "ง่วงนอน", f"น้องเริ่มง่วงแล้ว... ไม่ได้กิน {days} วันแล้วนะ", days
+        return "😟", "ยายเป็นห่วง", f"ยายนึกเริ่มเป็นห่วงแล้วนะ ไม่ได้บันทึก {days} วันแล้ว", days
     else:
-        return "🥺", "คิดถึงคุณ", f"น้องคิดถึงคุณมาก ไม่ได้เจอกัน {days} วันแล้ว กลับมาบันทึกกันเถอะ", days
+        return "🥺", "ยายหิว-ยายคิดถึง", f"ยายนึกคิดถึงหลานจัง ไม่ได้เจอ {days} วันแล้ว กลับมาบันทึกกันนะ", days
 
 def feed_mascot(username):
     """ให้อาหารน้อง (เรียกเมื่อบันทึกรายการ) — เพิ่มเหรียญ + streak"""
@@ -1465,24 +1465,54 @@ def feed_mascot(username):
     m2 = get_mascot(username)
     return int(m2["coins"]), int(m2["streak"]), True
 
-tabD, tabMascot, tabWallet, tab1, tab2, tabCareer, tabPartner, tabShop, tab6, tab7, tab8, tab9, tab10, tab3, tab4, tab5, tabConsult, tabService, tabUpgrade, tabPDPA = st.tabs([
-    "🏠 ภาพรวม (Dashboard)", "🐷 น้องกระปุก", "👛 กระเป๋าเงิน", "📒 บันทึกบัญชี", "🧮 คำนวณภาษี", "👔 ภาษีตามอาชีพ", "💞 ออมด้วยกัน", "🏪 ร้านค้า/ร้านอาหาร",
-    "📅 ภาษีครึ่งปี (ภ.ง.ด.94)", "🧾 VAT (ภ.พ.30)", "✂️ หัก ณ ที่จ่าย", "📦 ต้นทุนสินค้า",
-    "💲 คำนวณราคาขาย", "📊 วิเคราะห์รายเดือน-ปี", "🔮 วางแผนการเงิน", "📖 คลังกฎหมายภาษี",
-    "🤝 ปรึกษาผู้เชี่ยวชาญ", "💼 บริการของเรา", "⭐ อัปเกรดแพ็กเกจ", "🔒 ข้อมูลส่วนตัว/PDPA"
+tabD, tabMoney, tabTax, tabPrice, tabShop, tabAnalysis, tabPlan, tabLaw, tabMascot, tabPartner, tabConsult, tabService, tabUpgrade, tabPDPA = st.tabs([
+    "🏠 หน้าหลัก", "💰 รายรับ-รายจ่าย", "🧮 คำนวณภาษี", "💲 ต้นทุน+ราคาขาย", "🏪 ร้านค้า/ร้านอาหาร",
+    "📊 วิเคราะห์", "🔮 วางแผนการเงิน", "📖 คลังความรู้ภาษี",
+    "🐷 ยายนึก", "💞 ออมด้วยกัน", "🤝 ปรึกษาผู้เชี่ยวชาญ", "💼 บริการของเรา", "⭐ อัปเกรด", "🔒 ข้อมูล/PDPA"
 ])
+
+# ===== แท็บที่ถูกรวม/ซ่อน — ชี้ตัวแปรเดิมไปที่แท็บใหม่ กันโค้ดเดิมพัง =====
+tabWallet = tabMoney      # กระเป๋าเงิน รวมกับ รายรับ-รายจ่าย
+tab1 = tabMoney           # บันทึกบัญชี รวมกับ รายรับ-รายจ่าย
+tab2 = tabTax             # คำนวณภาษี
+tabCareer = tabTax        # ภาษีตามอาชีพ รวมกับ คำนวณภาษี
+tab9 = tabPrice           # ต้นทุนสินค้า รวมกับ ราคาขาย
+tab10 = tabPrice          # คำนวณราคาขาย
+tab3 = tabAnalysis        # วิเคราะห์รายเดือน-ปี
+tab4 = tabPlan            # วางแผนการเงิน
+tab5 = tabLaw             # คลังกฎหมายภาษี
+# แท็บธุรกิจ (ภ.ง.ด.94/VAT/หัก ณ ที่จ่าย) ย้ายไปรวมในแท็บร้านค้า
+tab6 = tabShop   # ภ.ง.ด.94
+tab7 = tabShop   # VAT
+tab8 = tabShop   # หัก ณ ที่จ่าย
 
 # =====================================================================
 #  TAB DASHBOARD — ภาพรวมสุขภาพการเงิน
 # =====================================================================
 with tabD:
     st.subheader("🏠 ภาพรวมสุขภาพการเงินของคุณ")
+
+    # ===== สถานะยายนึกเล็กๆ ด้านบน (สรุปให้ไม่รก) =====
+    _mood_emo, _mood_name, _mood_msg, _days = get_mascot_mood(USER)
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;gap:14px;padding:12px 18px;border-radius:14px;
+    background:linear-gradient(135deg,rgba(127,119,221,0.12),rgba(29,158,117,0.10));
+    border:1px solid rgba(127,119,221,0.25);margin-bottom:8px">
+    <div style="font-size:38px">{_mood_emo}</div>
+    <div>
+    <div style="font-size:15px;font-weight:700;color:#E8E6F5">ยายนึก · {_mood_name}</div>
+    <div style="font-size:13px;color:#A8A4C8">{_mood_msg}</div>
+    </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.caption("👵 อยากดูยายนึกเต็มๆ + แต่งตัว ไปที่แท็บ 🐷 ยายนึก")
+
     conn = get_conn()
     df_d = read_sql("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
     conn.close()
 
     if df_d.empty:
-        st.info("ยังไม่มีข้อมูล — เริ่มบันทึกรายรับรายจ่ายที่แท็บ 'บันทึกบัญชี' แล้วกลับมาดูภาพรวมที่นี่")
+        st.info("ยังไม่มีข้อมูล — เริ่มบันทึกที่แท็บ 💰 รายรับ-รายจ่าย แล้วกลับมาดูภาพรวมที่นี่")
     else:
         df_d["txn_date"] = pd.to_datetime(df_d["txn_date"], errors="coerce")
         income = df_d[df_d.txn_type=="รายรับ"].amount.sum()
@@ -1515,7 +1545,10 @@ with tabD:
 
         st.divider()
 
-        # ===== กราฟรายรับ-รายจ่ายรายเดือน =====
+        # ===== กราฟรายรับ-รายจ่ายรายเดือน (Plotly สวย) =====
+        import plotly.graph_objects as go
+        import plotly.express as px
+
         cL, cR = st.columns(2)
         with cL:
             st.markdown("##### 📈 รายรับ-รายจ่ายรายเดือน")
@@ -1525,19 +1558,43 @@ with tabD:
             for c in ["รายรับ","รายจ่าย"]:
                 if c not in monthly.columns:
                     monthly[c] = 0
-            st.bar_chart(monthly[["รายรับ","รายจ่าย"]])
+            fig_bar = go.Figure()
+            fig_bar.add_trace(go.Bar(x=monthly.index, y=monthly["รายรับ"], name="รายรับ",
+                                     marker=dict(color="#1D9E75", line=dict(width=0)), marker_cornerradius=6))
+            fig_bar.add_trace(go.Bar(x=monthly.index, y=monthly["รายจ่าย"], name="รายจ่าย",
+                                     marker=dict(color="#E8674F", line=dict(width=0)), marker_cornerradius=6))
+            fig_bar.update_layout(
+                barmode="group", height=300, margin=dict(l=0,r=0,t=10,b=0),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#A8A4C8", size=12),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.06)"),
+            )
+            st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
 
         with cR:
-            st.markdown("##### 🍩 หมวดค่าใช้จ่ายสูงสุด")
+            st.markdown("##### 🍩 เงินหมดไปกับอะไร")
             exp_df = df_d[df_d.txn_type=="รายจ่าย"]
             if exp_df.empty:
                 st.info("ยังไม่มีรายจ่าย")
             else:
                 by_cat = exp_df.groupby("category")["amount"].sum().sort_values(ascending=False)
-                st.bar_chart(by_cat)
-                top_cat = by_cat.index[0]
-                top_amt = by_cat.iloc[0]
-                st.caption(f"💡 หมวดที่จ่ายมากสุด: **{top_cat}** ({top_amt:,.0f} บาท = {top_amt/expense*100:.0f}% ของรายจ่าย)")
+                colors = ["#7F77DD","#1D9E75","#E8674F","#F0B429","#5DCAA5","#B57FDD","#4F9EE8","#E85F9E"]
+                fig_donut = go.Figure(data=[go.Pie(
+                    labels=by_cat.index, values=by_cat.values, hole=0.55,
+                    marker=dict(colors=colors[:len(by_cat)], line=dict(color="#0B0A1F", width=2)),
+                    textinfo="percent", textfont=dict(size=12, color="#fff"),
+                )])
+                fig_donut.update_layout(
+                    height=300, margin=dict(l=0,r=0,t=10,b=0),
+                    paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#A8A4C8", size=11),
+                    showlegend=True, legend=dict(orientation="v", x=1, y=0.5, font=dict(size=10)),
+                    annotations=[dict(text=f"{expense:,.0f}<br>บาท", x=0.5, y=0.5,
+                                      font=dict(size=15, color="#E8E6F5"), showarrow=False)],
+                )
+                st.plotly_chart(fig_donut, use_container_width=True, config={"displayModeBar": False})
+                top_cat = by_cat.index[0]; top_amt = by_cat.iloc[0]
+                st.caption(f"💡 จ่ายเยอะสุด: **{top_cat}** ({top_amt:,.0f} บาท = {top_amt/expense*100:.0f}%)")
 
         st.divider()
 
@@ -1575,230 +1632,53 @@ with tabD:
 # =====================================================================
 #  TAB กระเป๋าเงิน — จัดการหลายกระเป๋า + ยอดคงเหลือ + กระทบยอด
 # =====================================================================
-with tabWallet:
-    st.subheader("👛 กระเป๋าเงินของคุณ")
-    st.caption("จัดการเงินหลายที่ — ธนาคาร เงินสด บัญชีร้าน แล้วดูยอดคงเหลือจริงทุกที่")
-
-    my_wallets = get_wallets(USER)
-
-    # ---------- สร้างกระเป๋าใหม่ ----------
-    with st.expander("➕ เพิ่มกระเป๋าเงินใหม่", expanded=my_wallets.empty):
-        if my_wallets.empty:
-            st.info("👋 เริ่มต้นใช้งาน: เพิ่มกระเป๋าเงินของคุณ แล้วกรอก **ยอดเงินที่มีอยู่ตอนนี้** เพื่อให้ระบบคำนวณยอดคงเหลือได้ถูกต้อง")
-        with st.form("wallet_form", clear_on_submit=True):
-            wf1, wf2, wf3 = st.columns(3)
-            with wf1:
-                w_name = st.text_input("ชื่อกระเป๋า", placeholder="เช่น กสิกร ส่วนตัว")
-            with wf2:
-                w_type = st.selectbox("ประเภท", ["🏦 ธนาคาร", "💵 เงินสด", "📱 PromptPay/e-Wallet", "🏪 บัญชีร้าน"])
-            with wf3:
-                w_open = st.number_input("ยอดเงินที่มีอยู่ตอนนี้ (บาท)", min_value=0.0, step=100.0, format="%.2f",
-                                         help="กรอกยอดเงินจริงที่มีในกระเป๋านี้ ณ ตอนนี้")
-            w_biz = st.checkbox("เป็นกระเป๋าของกิจการ/ร้าน (แยกจากเงินส่วนตัว)")
-            if st.form_submit_button("เพิ่มกระเป๋า", use_container_width=True):
-                if w_name.strip():
-                    conn = get_conn()
-                    conn.execute(
-                        "INSERT INTO wallets (user_id, name, wtype, opening_balance, is_business) VALUES (?,?,?,?,?)",
-                        (USER, w_name.strip(), w_type, float(w_open), 1 if w_biz else 0)
-                    )
-                    conn.commit(); conn.close()
-                    st.success(f"✅ เพิ่มกระเป๋า '{w_name}' แล้ว")
-                    st.rerun()
-                else:
-                    st.error("กรุณาตั้งชื่อกระเป๋า")
-
-    if my_wallets.empty:
-        st.warning("⚠️ ยังไม่มีกระเป๋าเงิน — เพิ่มกระเป๋าก่อน แล้วเวลาบันทึกรายการจะเลือกได้ว่าเงินเข้า/ออกจากกระเป๋าไหน")
-    else:
-        # ---------- ยอดคงเหลือแต่ละกระเป๋า ----------
-        st.divider()
-        st.markdown("##### 💰 ยอดคงเหลือปัจจุบัน")
-
-        total_all = 0.0
-        total_personal = 0.0
-        total_biz = 0.0
-        wallet_rows = []
-
-        for _, w in my_wallets.iterrows():
-            bal, inflow, outflow = calc_wallet_balance(USER, w["name"], w["opening_balance"])
-            total_all += bal
-            if w["is_business"]:
-                total_biz += bal
-            else:
-                total_personal += bal
-            wallet_rows.append({
-                "กระเป๋า": f"{w['wtype']} {w['name']}",
-                "ยอดยกมา": f"{w['opening_balance']:,.2f}",
-                "เงินเข้า": f"{inflow:,.2f}",
-                "เงินออก": f"{outflow:,.2f}",
-                "คงเหลือ": f"{bal:,.2f}",
-                "ประเภท": "🏪 กิจการ" if w["is_business"] else "🧑 ส่วนตัว",
-            })
-
-        b1, b2, b3 = st.columns(3)
-        b1.metric("💰 เงินรวมทั้งหมด", f"{total_all:,.2f} ฿")
-        b2.metric("🧑 เงินส่วนตัว", f"{total_personal:,.2f} ฿")
-        b3.metric("🏪 เงินกิจการ", f"{total_biz:,.2f} ฿")
-
-        st.dataframe(pd.DataFrame(wallet_rows), use_container_width=True, hide_index=True)
-
-        # ---------- แยกเงินได้ / ไม่ใช่เงินได้ (สำคัญมาก) ----------
-        st.divider()
-        st.markdown("##### 🧮 เงินในบัญชีเป็นเงินอะไรบ้าง? (สำคัญต่อการคิดภาษี)")
-        st.caption("ไม่ใช่เงินทุกบาทในบัญชีที่ต้องเสียภาษี — ระบบแยกให้เห็นชัด")
-
-        conn = get_conn()
-        df_all = read_sql("SELECT * FROM transactions WHERE user_id=? AND txn_type='รายรับ'", conn, params=(USER,))
-        conn.close()
-
-        if df_all.empty:
-            st.info("ยังไม่มีรายรับ — เริ่มบันทึกที่แท็บ 'บันทึกบัญชี'")
-        else:
-            if "is_taxable" not in df_all.columns:
-                df_all["is_taxable"] = 1
-            df_all["is_taxable"] = df_all["is_taxable"].fillna(1).astype(int)
-
-            taxable = df_all[df_all["is_taxable"] == 1]["amount"].sum()
-            non_taxable = df_all[df_all["is_taxable"] == 0]["amount"].sum()
-            total_in = taxable + non_taxable
-
-            t1, t2, t3 = st.columns(3)
-            t1.metric("💵 เงินเข้าทั้งหมด", f"{total_in:,.2f} ฿")
-            t2.metric("✅ เงินได้ (เสียภาษี)", f"{taxable:,.2f} ฿")
-            t3.metric("❌ ไม่ใช่เงินได้", f"{non_taxable:,.2f} ฿", "ไม่เสียภาษี")
-
-            if non_taxable > 0:
-                st.success(f"💡 ระบบตัดเงิน {non_taxable:,.0f} บาท ที่ไม่ใช่เงินได้ออกจากฐานภาษีให้แล้ว — ช่วยไม่ให้คุณเสียภาษีเกิน!")
-                # แยกรายละเอียด
-                non_df = df_all[df_all["is_taxable"] == 0]
-                if "non_income_type" in non_df.columns and not non_df.empty:
-                    breakdown = non_df.groupby("non_income_type")["amount"].sum().reset_index()
-                    breakdown.columns = ["ประเภท (ไม่ใช่เงินได้)", "จำนวนเงิน"]
-                    st.dataframe(breakdown, use_container_width=True, hide_index=True)
-
-            st.info("📌 **ฐานภาษีของคุณ = " + f"{taxable:,.2f} บาท** (ไม่ใช่ยอดเงินในบัญชีทั้งหมด)")
-
-        # ---------- กระทบยอด (Reconcile) ----------
-        st.divider()
-        st.markdown("##### 🔍 กระทบยอด — เช็คว่ายอดในระบบตรงกับธนาคารจริงไหม")
-        st.caption("ถ้ายอดไม่ตรง แปลว่าอาจลืมบันทึกรายการบางอย่าง")
-
-        rec1, rec2 = st.columns(2)
-        with rec1:
-            rec_wallet = st.selectbox("เลือกกระเป๋าที่จะกระทบยอด", my_wallets["name"].tolist(), key="rec_wallet")
-        with rec2:
-            actual_bal = st.number_input("ยอดจริงในธนาคาร/มือ (บาท)", min_value=0.0, step=100.0, format="%.2f", key="rec_actual")
-
-        if actual_bal > 0:
-            w_row = my_wallets[my_wallets["name"] == rec_wallet].iloc[0]
-            sys_bal, _, _ = calc_wallet_balance(USER, rec_wallet, w_row["opening_balance"])
-            diff = actual_bal - sys_bal
-
-            rc1, rc2, rc3 = st.columns(3)
-            rc1.metric("ยอดในระบบ", f"{sys_bal:,.2f} ฿")
-            rc2.metric("ยอดจริง", f"{actual_bal:,.2f} ฿")
-            rc3.metric("ผลต่าง", f"{diff:,.2f} ฿", delta_color="off")
-
-            if abs(diff) < 0.01:
-                st.success("✅ ยอดตรงกันพอดี! บันทึกครบถ้วน ไม่มีอะไรตกหล่น")
-            elif diff > 0:
-                st.warning(f"⚠️ ยอดจริงมากกว่าระบบ {diff:,.2f} บาท — อาจมีเงินเข้าที่ยังไม่ได้บันทึก (เช่น ดอกเบี้ย เงินโอนเข้า)")
-            else:
-                st.warning(f"⚠️ ยอดจริงน้อยกว่าระบบ {abs(diff):,.2f} บาท — อาจมีรายจ่ายที่ยังไม่ได้บันทึก (เช่น ค่าธรรมเนียม ตัดบัตร)")
-
-        # ---------- ลบกระเป๋า ----------
-        with st.expander("🗑️ ลบกระเป๋าเงิน"):
-            del_w = st.selectbox("เลือกกระเป๋าที่จะลบ", my_wallets["name"].tolist(), key="del_wallet")
-            st.caption("⚠️ ลบกระเป๋าไม่ลบรายการที่บันทึกไว้ แต่รายการจะไม่มีกระเป๋าสังกัด")
-            if st.button("ลบกระเป๋านี้"):
-                conn = get_conn()
-                conn.execute("DELETE FROM wallets WHERE user_id=? AND name=?", (USER, del_w))
-                conn.commit(); conn.close()
-                st.success(f"ลบกระเป๋า '{del_w}' แล้ว")
-                st.rerun()
-
-    st.caption("💡 เคล็ดลับ: แยกบัญชีร้านกับบัญชีส่วนตัว จะทำให้สรุปยอดและคิดภาษีง่ายขึ้นมาก")
-
-# =====================================================================
-#  TAB 1 — บันทึกบัญชี (มีติ๊กเลือกประเภทเงินได้)
-# =====================================================================
+with tabMoney:
+    st.subheader("💰 รายรับ-รายจ่าย")
+    st.caption("บันทึกเงินเข้า-ออกง่ายๆ ระบบสรุปให้เห็นว่าเก็บได้เท่าไหร่ หมดไปกับอะไร")
 with tab1:
-    # ดึงกระเป๋าเงินของผู้ใช้
-    _w = get_wallets(USER)
-    _wallet_names = _w["name"].tolist() if not _w.empty else []
-
-    if not _wallet_names:
-        st.warning("⚠️ ยังไม่มีกระเป๋าเงิน — แนะนำให้ไปเพิ่มที่แท็บ **👛 กระเป๋าเงิน** ก่อน เพื่อให้ระบบคำนวณยอดคงเหลือได้ถูกต้อง (บันทึกได้ แต่จะไม่รู้ว่าเงินอยู่ที่ไหน)")
-
+    st.markdown("---")
     with st.form("txn_form", clear_on_submit=True):
-        st.subheader("📝 บันทึกรายการใหม่")
+        st.subheader("📝 บันทึกรายรับ-รายจ่าย")
         c1, c2, c3 = st.columns(3)
         with c1:
             txn_date = st.date_input("วันที่", value=date.today())
             txn_type = st.selectbox("ประเภท", ["รายรับ", "รายจ่าย"])
-            sel_wallet = st.selectbox("💳 เงินเข้า/ออกจากกระเป๋าไหน",
-                                      _wallet_names if _wallet_names else ["(ยังไม่มีกระเป๋า)"])
+            sel_wallet = st.selectbox("💳 เงินอยู่ที่ไหน", ["🏦 ธนาคาร", "💵 เงินสด"])
         with c2:
-            # ⭐ จุดสำคัญ: เงินเข้านี้เป็น "เงินได้" (เสียภาษี) หรือไม่?
-            is_income = st.radio(
-                "เงินนี้เป็นเงินได้ที่ต้องเสียภาษีไหม? (เฉพาะรายรับ)",
-                ["✅ ใช่ เป็นเงินได้", "❌ ไม่ใช่เงินได้"],
-                help="เช่น เงินโอนจากญาติ เงินกู้ โอนระหว่างบัญชีตัวเอง = ไม่ใช่เงินได้ ไม่ต้องเสียภาษี"
-            )
-            income_type = st.selectbox(
-                "ประเภทเงินได้ (มาตรา 40) — ถ้าเป็นเงินได้",
-                ["— ไม่ระบุ —"] + list(INCOME_TYPES.keys()),
-            )
-            non_income_type = st.selectbox(
-                "ถ้าไม่ใช่เงินได้ — เป็นเงินอะไร?",
-                ["— ไม่ระบุ —"] + list(NON_INCOME_TYPES.keys()),
-            )
-        with c3:
             amount = st.number_input("จำนวนเงิน (บาท)", min_value=0.0, step=100.0, format="%.2f")
-            category = st.selectbox("หมวดหมู่บัญชี", [
-                "ขายสินค้า", "ค่าบริการ", "รายได้อื่นๆ",
-                "ซื้อสินค้า/วัตถุดิบ", "ค่าขนส่ง", "ค่าเช่า",
-                "ค่าน้ำค่าไฟ", "ค่าโฆษณา", "เงินเดือนพนักงาน", "ค่าใช้จ่ายอื่นๆ"
+            cat_choice = st.selectbox("หมวดหมู่", [
+                "ขายของ/รายได้", "เงินเดือน", "รับจ้าง/ฟรีแลนซ์", "รายได้อื่นๆ",
+                "ค่ากิน/ของใช้", "ซื้อของมาขาย/วัตถุดิบ", "ค่าเดินทาง", "ค่าเช่า",
+                "ค่าน้ำ-ไฟ-เน็ต", "ช้อปปิ้ง", "ค่าใช้จ่ายอื่นๆ", "✏️ อื่นๆ (พิมพ์เอง)"
             ])
-            description = st.text_input("รายละเอียด (ไม่บังคับ)")
+        with c3:
+            custom_cat = st.text_input("ถ้าเลือก 'อื่นๆ' พิมพ์หมวดที่นี่", placeholder="เช่น ค่าหวย, ค่ารักษา")
+            description = st.text_input("รายละเอียด (ไม่บังคับ)", placeholder="เช่น ขายหมี่ไก่ฉีก 10 กล่อง")
 
-        if st.form_submit_button("💾 บันทึกรายการ", use_container_width=True):
+        if st.form_submit_button("💾 บันทึก", use_container_width=True):
             if amount <= 0:
-                st.error("กรุณากรอกจำนวนเงินมากกว่า 0")
+                st.error("ใส่จำนวนเงินก่อนนะ")
             else:
-                it = None if income_type == "— ไม่ระบุ —" else income_type
-                # รายจ่ายไม่ต้องสนใจเรื่องเงินได้
-                if txn_type == "รายจ่าย":
-                    taxable_flag = 1
-                    nit = None
-                else:
-                    taxable_flag = 1 if is_income.startswith("✅") else 0
-                    nit = None if (taxable_flag == 1 or non_income_type == "— ไม่ระบุ —") else non_income_type
-                    if taxable_flag == 0:
-                        it = None  # ไม่ใช่เงินได้ ก็ไม่มีมาตรา 40
-
-                wal = sel_wallet if _wallet_names else None
+                # หมวด: ถ้าเลือกอื่นๆ ใช้ที่พิมพ์เอง
+                category = custom_cat.strip() if cat_choice.startswith("✏️") and custom_cat.strip() else cat_choice
+                if cat_choice.startswith("✏️") and not custom_cat.strip():
+                    category = "อื่นๆ"
+                # ทุกรายรับ default เป็นเงินได้ (is_taxable=1) — ไปเลือกตัดออกตอนคำนวณภาษี
                 conn = get_conn()
                 conn.execute(
                     "INSERT INTO transactions (txn_date, txn_type, income_type, category, description, amount, user_id, wallet, is_taxable, non_income_type) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (txn_date.isoformat(), txn_type, it, category, description, amount, USER, wal, taxable_flag, nit)
+                    (txn_date.isoformat(), txn_type, None, category, description, amount, USER, sel_wallet, 1, None)
                 )
                 conn.commit(); conn.close()
-                # 🐷 ให้อาหารน้องกระปุก
                 new_coins, new_streak, fed = feed_mascot(USER)
-
-                if txn_type == "รายรับ" and taxable_flag == 0:
-                    st.success(f"✅ บันทึก {amount:,.2f} บาท (ไม่ใช่เงินได้ — ไม่นำไปคิดภาษี) เรียบร้อย!")
-                else:
-                    st.success(f"✅ บันทึก {txn_type} {amount:,.2f} บาท เรียบร้อย!")
+                st.success(f"✅ บันทึก {txn_type} {amount:,.0f} บาท ({category}) เรียบร้อย!")
 
                 if fed:
                     if new_streak % 7 == 0 and new_streak > 0:
                         st.balloons()
-                        st.success(f"🎉 น้องกระปุกได้กินแล้ว! บันทึกต่อเนื่อง {new_streak} วัน — รับโบนัส 20 เหรียญ! (รวม {new_coins} เหรียญ)")
+                        st.success(f"🎉 ยายนึกได้กินแล้ว! บันทึกต่อเนื่อง {new_streak} วัน — รับโบนัส 20 เหรียญ! (รวม {new_coins} เหรียญ)")
                     else:
-                        st.info(f"🐷 น้องกระปุกได้กินแล้ว! +10 เหรียญ (รวม {new_coins} เหรียญ) · ต่อเนื่อง {new_streak} วัน")
+                        st.info(f"🐷 ยายนึกได้กินแล้ว! +10 เหรียญ (รวม {new_coins} เหรียญ) · ต่อเนื่อง {new_streak} วัน")
 
     conn = get_conn()
     df = read_sql("SELECT * FROM transactions WHERE user_id=? ORDER BY txn_date DESC, id DESC", conn, params=(USER,))
@@ -1890,18 +1770,41 @@ with tab2:
     inc = read_sql("SELECT * FROM transactions WHERE txn_type='รายรับ' AND user_id=?", conn, params=(USER,))
     conn.close()
 
-    # ⭐ ตัดรายการที่ "ไม่ใช่เงินได้" ออกจากฐานภาษี (เงินโอนญาติ เงินกู้ โอนระหว่างบัญชี ฯลฯ)
+    # ===== ให้ผู้ใช้เลือกว่ารายรับไหน "ไม่ต้องเสียภาษี" (ย้ายมาจากตอนบันทึก) =====
     if not inc.empty:
-        if "is_taxable" not in inc.columns:
-            inc["is_taxable"] = 1
-        inc["is_taxable"] = inc["is_taxable"].fillna(1).astype(int)
-        excluded_amt = inc[inc["is_taxable"] == 0]["amount"].sum()
-        inc = inc[inc["is_taxable"] == 1]
+        with st.expander("💡 เงินแบบไหนไม่ต้องเสียภาษี? (กดดูก่อนคำนวณ)", expanded=False):
+            st.markdown("""
+**เงินที่เข้าบัญชี ไม่ใช่ว่าต้องเสียภาษีทุกบาท** เงินพวกนี้ **ไม่ต้องเสียภาษี**:
+- 💝 **เงินที่คนอื่นให้/โอนให้** — พ่อแม่ ญาติ แฟนโอนมาให้ใช้
+- 🤝 **เงินยืม/เงินกู้** — เป็นหนี้ ต้องคืน ไม่ใช่รายได้
+- 🔄 **ย้ายเงินตัวเอง** — โอนจากบัญชีนึงไปอีกบัญชี
+- ↩️ **เงินคืน** — เงินทอน คืนของ คืนภาษี
+- 💰 **เงินลงทุนตัวเอง** — เงินก้อนที่เอามาลงทุนในร้าน
+
+**เงินที่ต้องเสียภาษี** = เงินที่หามาได้จากการทำงาน/ขายของ/ให้บริการ
+            """)
+        st.caption("👇 ติ๊กเอารายการที่ **ไม่ต้องเสียภาษี** ออก (ถ้ามี) แล้วระบบจะคำนวณจากเงินได้จริงเท่านั้น")
+
+        inc = inc.reset_index(drop=True)
+        inc["ตัดออก"] = False
+        # แสดงเฉพาะรายรับให้เลือกตัด
+        show_inc = inc[["txn_date", "category", "description", "amount"]].copy()
+        show_inc.columns = ["วันที่", "หมวด", "รายละเอียด", "จำนวนเงิน"]
+        show_inc["ไม่เสียภาษี (ติ๊ก)"] = False
+        edited = st.data_editor(
+            show_inc, use_container_width=True, hide_index=True,
+            column_config={"ไม่เสียภาษี (ติ๊ก)": st.column_config.CheckboxColumn(help="ติ๊กถ้าเงินนี้ไม่ใช่รายได้ เช่น เงินแม่โอนมา")},
+            disabled=["วันที่", "หมวด", "รายละเอียด", "จำนวนเงิน"], key="tax_income_editor"
+        )
+        # ตัดรายการที่ติ๊ก
+        mask_exclude = edited["ไม่เสียภาษี (ติ๊ก)"].values
+        excluded_amt = inc[mask_exclude]["amount"].sum()
+        inc = inc[~mask_exclude]
         if excluded_amt > 0:
-            st.success(f"✅ ระบบตัดเงิน {excluded_amt:,.0f} บาท ที่ไม่ใช่เงินได้ (เงินโอนจากญาติ/เงินกู้/โอนระหว่างบัญชี) ออกจากฐานภาษีแล้ว — คุณไม่ต้องเสียภาษีส่วนนี้")
+            st.success(f"✅ ตัดเงิน {excluded_amt:,.0f} บาท (ที่ไม่ใช่รายได้) ออกจากการคิดภาษีแล้ว — เหลือเงินได้จริง {inc['amount'].sum():,.0f} บาท")
 
     if inc.empty:
-        st.info("ยังไม่มีรายรับที่เป็นเงินได้ในระบบ — ไปบันทึกที่แท็บ 'บันทึกบัญชี' ก่อน")
+        st.info("ยังไม่มีรายได้ในระบบ — ไปบันทึกที่แท็บ 💰 รายรับ-รายจ่าย ก่อน")
     else:
         # จัดกลุ่มรายรับตามประเภทเงินได้ที่ติ๊กไว้
         st.markdown("##### 📥 รายรับแยกตามประเภทเงินได้ (ดึงจากที่คุณติ๊กไว้)")
@@ -2214,6 +2117,7 @@ with tab4:
 #  TAB 6 — ภาษีครึ่งปี (ภ.ง.ด.94) มาตรา 56 ทวิ
 # =====================================================================
 with tab6:
+    st.divider()
     st.subheader("📅 ภาษีเงินได้ครึ่งปี (ภ.ง.ด.94)")
     st.caption("เฉพาะเงินได้ ม.40(5)-(8) ที่ได้รับ ม.ค.-มิ.ย. | ลดหย่อนใช้ได้ครึ่งเดียว แต่อัตราภาษีเท่าเดิม (ม.56 ทวิ)")
 
@@ -2319,6 +2223,7 @@ with tab6:
 #  TAB 7 — VAT (ภ.พ.30) ภาษีมูลค่าเพิ่ม
 # =====================================================================
 with tab7:
+    st.divider()
     st.subheader("🧾 ภาษีมูลค่าเพิ่ม (ภ.พ.30)")
     st.caption("ภาษีขาย (7% ของรายรับ) − ภาษีซื้อ (7% ของรายจ่าย) | ยื่นทุกเดือน ภายในวันที่ 15 ของเดือนถัดไป")
 
@@ -2401,6 +2306,7 @@ with tab7:
 #  TAB 8 — ภาษีหัก ณ ที่จ่าย (Withholding Tax)
 # =====================================================================
 with tab8:
+    st.divider()
     st.subheader("✂️ คำนวณภาษีหัก ณ ที่จ่าย (ภ.ง.ด.3)")
     st.caption("ผู้จ่ายเงินหักภาษีไว้ล่วงหน้าจากผู้รับ แล้วนำส่งกรมสรรพากร | อัตราขึ้นกับประเภทเงินได้")
 
@@ -3316,28 +3222,33 @@ with tabCareer:
     st.caption("⚠️ ประมาณการตามกฎหมายปีภาษี 2568 | ควรตรวจสอบกับกรมสรรพากรก่อนยื่นจริง")
 
 # =====================================================================
-#  TAB น้องกระปุก — Mascot สะท้อนสุขภาพการเงิน
+#  TAB ยายนึก — Mascot สะท้อนสุขภาพการเงิน
 # =====================================================================
 with tabMascot:
-    st.subheader("🐷 น้องกระปุก — เพื่อนคู่ใจเรื่องเงิน")
+    st.subheader("👵 ยายนึก — กำลังใจเรื่องเงินของหลาน")
 
     m = get_mascot(USER)
     mood_emo, mood_name, mood_msg, days_away = get_mascot_mood(USER)
     outfit = m["outfit"] if m is not None else "ธรรมดา"
     coins = int(m["coins"]) if m is not None else 0
     streak = int(m["streak"]) if m is not None else 0
-    base_emoji = OUTFITS.get(outfit, OUTFITS["ธรรมดา"])["emoji"]
 
-    # ---------- แสดงน้อง ----------
+    # URL รูปยายนึก 3D (ผู้ใช้อัปขึ้น GitHub ชื่อ yai_nuk.png)
+    YAINUK_IMG = "https://raw.githubusercontent.com/siriwatkhotphat2546-lab/taxsmart/main/yai_nuk.png"
+
+    # ---------- แสดงยายนึก ----------
     mc1, mc2 = st.columns([1, 2])
     with mc1:
         st.markdown(f"""
-        <div style="text-align:center;padding:30px;border-radius:20px;
+        <div style="text-align:center;padding:16px;border-radius:20px;
         background:linear-gradient(135deg,rgba(127,119,221,0.15),rgba(29,158,117,0.12));
         border:1px solid rgba(127,119,221,0.3)">
-        <div style="font-size:80px;line-height:1">{base_emoji}{mood_emo}</div>
-        <div style="font-size:18px;font-weight:700;margin-top:10px">{mood_name}</div>
-        <div style="font-size:13px;color:#A8A4C8;margin-top:4px">ชุด: {outfit}</div>
+        <img src="{YAINUK_IMG}" style="width:100%;max-width:200px;border-radius:16px;
+        box-shadow:0 8px 24px rgba(0,0,0,0.3)"
+        onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+        <div style="display:none;font-size:80px">👵{mood_emo}</div>
+        <div style="font-size:20px;font-weight:700;margin-top:12px">{mood_emo} {mood_name}</div>
+        <div style="font-size:12px;color:#A8A4C8;margin-top:4px">ชุด: {outfit}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -3348,17 +3259,27 @@ with tabMascot:
         s2.metric("🔥 บันทึกต่อเนื่อง", f"{streak} วัน")
         s3.metric("📅 ห่างหายไป", f"{days_away if days_away < 999 else '-'} วัน")
 
-        # ให้กำลังใจตามสถานะ
         if days_away == 0:
-            st.success("💚 เยี่ยมมาก! บันทึกทุกวันทำให้เห็นเงินชัดขึ้น")
+            st.success("💚 วันนี้หลานบันทึกแล้ว ยายนึกภูมิใจมาก!")
         elif days_away <= 7 and days_away > 2:
-            st.info("💡 กลับมาบันทึกวันนี้ น้องจะดีใจมาก — และคุณจะไม่ลืมว่าเงินไปไหน")
+            st.info("💡 กลับมาบันทึกวันนี้นะ ยายนึกเป็นห่วง — และหลานจะไม่ลืมว่าเงินไปไหน")
         elif days_away > 7:
-            st.warning("🌱 ไม่เป็นไรนะ เริ่มใหม่ได้เสมอ — บันทึกวันนี้แค่รายการเดียวก็ยังดี")
+            st.warning("🌱 ไม่เป็นไรนะลูก เริ่มใหม่ได้เสมอ — บันทึกวันนี้แค่รายการเดียวก็ยังดี")
 
-    # ---------- น้องพูดข้อมูลจริง ----------
+        # เรื่องราวแรงบันดาลใจ
+        st.markdown("""
+        <div style="padding:14px 18px;border-radius:12px;margin-top:8px;
+        background:rgba(240,180,41,0.10);border-left:3px solid #F0B429">
+        <div style="font-size:13px;color:#E8E6F5;font-style:italic">
+        💛 "ยายนึกอยากเห็นเงินล้านจากมือหลาน"</div>
+        <div style="font-size:12px;color:#A8A4C8;margin-top:4px">
+        แอปนี้สร้างขึ้นเพื่อความฝันนั้น — ทุกบาทที่หลานบันทึก คือก้าวเล็กๆ สู่เงินล้านที่ยายอยากเห็น</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ---------- ยายนึกพูดข้อมูลจริง ----------
     st.divider()
-    st.markdown("##### 💬 น้องกระปุกมีอะไรจะบอก")
+    st.markdown("##### 💬 ยายนึกมีอะไรจะบอก")
     conn = get_conn()
     df_m = read_sql("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))
     conn.close()
@@ -3411,7 +3332,7 @@ with tabMascot:
             else:
                 st.caption(f"🔒 ต้องมี {oinfo['cost']} เหรียญ")
 
-    st.caption("💡 น้องกระปุกช่วยให้คุณกลับมาบันทึกทุกวัน — เพราะการเห็นเงินชัดเริ่มจากการจดทุกบาท")
+    st.caption("💡 ยายนึกช่วยให้คุณกลับมาบันทึกทุกวัน — เพราะการเห็นเงินชัดเริ่มจากการจดทุกบาท")
 
 # =====================================================================
 #  TAB ออมด้วยกัน — Partner Mode (คู่รัก/เพื่อน/ครอบครัว)
