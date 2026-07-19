@@ -3,7 +3,10 @@ import pandas as pd
 from datetime import date, datetime
 
 from core.db import get_conn, read_sql
-from core.tax import calc_progressive_tax, INCOME_TYPES, CAREERS
+from core.tax import (
+    calc_progressive_tax, INCOME_TYPES, CAREERS,
+    INCOME_CODE_MAP, DEDUCTION_TYPES, EXPENSE_WORK,
+)
 
 
 def render(tab_tax, tab_law, USER):
@@ -12,7 +15,22 @@ def render(tab_tax, tab_law, USER):
 
         conn = get_conn()
         inc = read_sql("SELECT * FROM transactions WHERE txn_type='รายรับ' AND user_id=?", conn, params=(USER,))
+        exp = read_sql("SELECT * FROM transactions WHERE txn_type='รายจ่าย' AND user_id=?", conn, params=(USER,))
         conn.close()
+
+        # ===== ดึงข้อมูลจากรายจ่ายที่บันทึกไว้ (เชื่อมกับแท็บบันทึกเงิน) =====
+        # 1) ค่าลดหย่อน: รวมยอดตามประเภทที่ผู้ใช้ติ๊ก "ลดหย่อนภาษีได้"
+        ded_prefill = {}      # {ประเภทลดหย่อน: ยอดรวม}
+        biz_actual = 0.0      # ค่าใช้จ่าย "ทำมาหากิน" รวม (ไว้เลือกหักตามจริง)
+        if not exp.empty and "non_income_type" in exp.columns:
+            for _dtype in DEDUCTION_TYPES:
+                ded_prefill[_dtype] = float(exp[exp["non_income_type"] == _dtype]["amount"].sum())
+            biz_actual = float(exp[exp["non_income_type"] == EXPENSE_WORK]["amount"].sum())
+
+        def _pf(dtype, cap=None):
+            """ยอดลดหย่อนที่ดึงมาให้ (clamp ไม่ให้เกินเพดานของช่อง)"""
+            v = ded_prefill.get(dtype, 0.0)
+            return float(min(v, cap)) if cap is not None else float(v)
 
         # ===== ให้ผู้ใช้เลือกว่ารายรับไหน "ไม่ต้องเสียภาษี" (ย้ายมาจากตอนบันทึก) =====
         if not inc.empty:
@@ -50,18 +68,24 @@ def render(tab_tax, tab_law, USER):
         if inc.empty:
             st.info("ยังไม่มีรายได้ในระบบ — ไปบันทึกที่แท็บ 💰 รายรับ-รายจ่าย ก่อน")
         else:
-            # จัดกลุ่มรายรับตามประเภทเงินได้ที่ติ๊กไว้
-            st.markdown("##### 📥 รายรับแยกตามประเภทเงินได้ (ดึงจากที่คุณติ๊กไว้)")
+            # จัดกลุ่มรายรับตามประเภทเงินได้ที่ติ๊กไว้ (income_type เก็บรหัสมาตรา เช่น "40(1)")
+            st.markdown("##### 📥 รายรับแยกตามประเภทเงินได้ (ดึงจากที่คุณติ๊กไว้ตอนบันทึก — ไม่ต้องกรอกซ้ำ)")
             grouped = inc.groupby("income_type", dropna=False)["amount"].sum().reset_index()
 
-            total_after_expense = 0.0
+            total_after_expense = 0.0     # เงินได้หลังหักค่าใช้จ่ายแบบเหมา (ค่าตั้งต้น)
+            eligible_income = 0.0         # รายรับที่หัก "ตามจริง" ได้ (ม.40(5)-(8))
+            eligible_flat_after = 0.0     # เงินคงเหลือ (เหมา) เฉพาะกลุ่มที่หักตามจริงได้
+            noneligible_after = 0.0       # เงินคงเหลือของกลุ่มที่หักตามจริงไม่ได้ (40(1)(2)(4))
             used_sections = []
             for _, row in grouped.iterrows():
-                it = row["income_type"]
+                code = row["income_type"]
                 amt = row["amount"]
+                # แปลงรหัสมาตรา -> key ใน INCOME_TYPES
+                it = INCOME_CODE_MAP.get(code) if code is not None else None
                 if it is None or it not in INCOME_TYPES:
-                    st.warning(f"⚠️ รายรับ {amt:,.0f} บาท ยังไม่ได้ระบุประเภทเงินได้ — หักค่าใช้จ่ายไม่ได้จนกว่าจะระบุ")
+                    st.warning(f"⚠️ รายรับ {amt:,.0f} บาท ยังไม่ได้ระบุประเภทเงินได้ (ติ๊ก 'ไม่แน่ใจ' ไว้) — หักค่าใช้จ่ายไม่ได้จนกว่าจะระบุที่แท็บ 💰 รายรับ-รายจ่าย")
                     total_after_expense += amt
+                    noneligible_after += amt
                     continue
                 info = INCOME_TYPES[it]
                 rate = info["expense_rate"]; cap = info["expense_cap"]
@@ -71,14 +95,41 @@ def render(tab_tax, tab_law, USER):
                 after = amt - expense
                 total_after_expense += after
                 used_sections.append(info["section"])
+                # กลุ่มที่หักตามจริงได้ = ไม่มีเพดาน (cap is None) => ม.40(5)-(8)
+                if cap is None:
+                    eligible_income += amt
+                    eligible_flat_after += after
+                else:
+                    noneligible_after += after
                 st.markdown(
                     f"**{it}** — รายรับ {amt:,.0f} | หักค่าใช้จ่าย "
                     f"({info['expense_rule']}) = {expense:,.0f} | เหลือ {after:,.0f} บาท"
                 )
 
+            # ===== ตัวเลือกหักค่าใช้จ่าย "ตามจริง" จากรายจ่ายที่ติ๊ก "ทำมาหากิน" =====
+            if biz_actual > 0 and eligible_income > 0:
+                st.info(f"💼 ระบบดึง **ค่าใช้จ่ายทำมาหากิน** ที่คุณบันทึกไว้ = **{biz_actual:,.0f} บาท** (จากแท็บ 💰 รายรับ-รายจ่าย)")
+                use_actual = st.checkbox(
+                    f"ใช้ค่าใช้จ่ายตามจริง {biz_actual:,.0f} บาท แทนแบบเหมา (เฉพาะเงินได้ ม.40(5)-(8) ที่หักตามจริงได้)",
+                    help="ถ้ามีใบเสร็จครบและค่าใช้จ่ายจริงมากกว่าแบบเหมา การหักตามจริงจะเสียภาษีน้อยกว่า",
+                )
+                if use_actual:
+                    eligible_after_actual = max(0.0, eligible_income - biz_actual)
+                    total_after_expense = noneligible_after + eligible_after_actual
+                    st.success(
+                        f"✅ ใช้แบบตามจริง: รายรับกลุ่มหักตามจริงได้ {eligible_income:,.0f} − ค่าใช้จ่ายจริง {biz_actual:,.0f} "
+                        f"= {eligible_after_actual:,.0f} บาท (เทียบแบบเหมาเหลือ {eligible_flat_after:,.0f})"
+                    )
+
             st.divider()
             st.markdown("##### 📋 ค่าลดหย่อน ปีภาษี 2568 — ครบทุกรายการ (อ้างอิง ภ.ง.ด.90/91)")
             st.caption("เปิดเฉพาะกลุ่มที่คุณใช้สิทธิ์ — ส่วนที่ไม่ได้กรอกระบบจะถือเป็น 0")
+
+            # แจ้งผู้ใช้ว่าระบบดึงยอดลดหย่อนจากที่บันทึกไว้มาเติมให้แล้ว
+            _pulled = {k: v for k, v in ded_prefill.items() if v > 0}
+            if _pulled:
+                _lines = " · ".join(f"{k} {v:,.0f}" for k, v in _pulled.items())
+                st.success(f"✅ ดึงค่าลดหย่อนที่คุณติ๊กไว้ตอนบันทึกมาเติมให้แล้ว: {_lines} — แก้ตัวเลขในช่องด้านล่างได้")
 
             # ===== กลุ่ม 1: ส่วนตัวและครอบครัว =====
             with st.expander("👤 กลุ่ม 1 — ส่วนตัวและครอบครัว", expanded=True):
@@ -100,16 +151,16 @@ def render(tab_tax, tab_law, USER):
             with st.expander("🛡️ กลุ่ม 2 — ประกัน การออม และการลงทุน (มีเพดานรวม)"):
                 g2a, g2b = st.columns(2)
                 with g2a:
-                    social = st.number_input("ประกันสังคม (สูงสุด 9,000)", 0.0, 9_000.0, 0.0, step=100.0)
-                    life_ins = st.number_input("ประกันชีวิตทั่วไป", 0.0, 100_000.0, 0.0, step=1000.0)
-                    health_ins = st.number_input("ประกันสุขภาพตัวเอง (สูงสุด 25,000)", 0.0, 25_000.0, 0.0, step=1000.0)
-                    health_parents = st.number_input("ประกันสุขภาพบิดามารดา (สูงสุด 15,000)", 0.0, 15_000.0, 0.0, step=1000.0)
-                    thai_esg = st.number_input("กองทุน Thai ESG/ESGX (สูงสุด 300,000)", 0.0, 300_000.0, 0.0, step=1000.0)
+                    social = st.number_input("ประกันสังคม (สูงสุด 9,000)", 0.0, 9_000.0, _pf("ประกันสังคม", 9_000.0), step=100.0)
+                    life_ins = st.number_input("ประกันชีวิตทั่วไป", 0.0, 100_000.0, _pf("ประกันชีวิต", 100_000.0), step=1000.0)
+                    health_ins = st.number_input("ประกันสุขภาพตัวเอง (สูงสุด 25,000)", 0.0, 25_000.0, _pf("ประกันสุขภาพ", 25_000.0), step=1000.0)
+                    health_parents = st.number_input("ประกันสุขภาพบิดามารดา (สูงสุด 15,000)", 0.0, 15_000.0, _pf("ประกันสุขภาพพ่อแม่", 15_000.0), step=1000.0)
+                    thai_esg = st.number_input("กองทุน Thai ESG/ESGX (สูงสุด 300,000)", 0.0, 300_000.0, _pf("ThaiESG", 300_000.0), step=1000.0)
                 with g2b:
                     st.markdown("**กลุ่มเกษียณ (เพดานรวม 500,000):**")
                     pension_ins = st.number_input("ประกันชีวิตแบบบำนาญ", 0.0, 200_000.0, 0.0, step=1000.0)
-                    rmf = st.number_input("กองทุน RMF", 0.0, 500_000.0, 0.0, step=1000.0)
-                    pvd = st.number_input("กองทุนสำรองเลี้ยงชีพ (PVD)", 0.0, 500_000.0, 0.0, step=1000.0)
+                    rmf = st.number_input("กองทุน RMF", 0.0, 500_000.0, _pf("RMF", 500_000.0), step=1000.0)
+                    pvd = st.number_input("กองทุนสำรองเลี้ยงชีพ (PVD)", 0.0, 500_000.0, _pf("กองทุนสำรองเลี้ยงชีพ", 500_000.0), step=1000.0)
                     gpf = st.number_input("กบข. (ข้าราชการ)", 0.0, 500_000.0, 0.0, step=1000.0)
                     teacher_fund = st.number_input("กองทุนสงเคราะห์ครูเอกชน", 0.0, 500_000.0, 0.0, step=1000.0)
                     nsf = st.number_input("กองทุนการออมแห่งชาติ กอช. (สูงสุด 30,000)", 0.0, 30_000.0, 0.0, step=1000.0)
@@ -130,7 +181,7 @@ def render(tab_tax, tab_law, USER):
             with st.expander("🏠 กลุ่ม 3 — อสังหาฯ และมาตรการรัฐ"):
                 g3a, g3b = st.columns(2)
                 with g3a:
-                    home_interest = st.number_input("ดอกเบี้ยที่อยู่อาศัย (สูงสุด 100,000)", 0.0, 100_000.0, 0.0, step=1000.0)
+                    home_interest = st.number_input("ดอกเบี้ยที่อยู่อาศัย (สูงสุด 100,000)", 0.0, 100_000.0, _pf("ดอกเบี้ยบ้าน", 100_000.0), step=1000.0)
                     easy_ereceipt = st.number_input("Easy E-Receipt 2.0 (สูงสุด 50,000)", 0.0, 50_000.0, 0.0, step=1000.0)
                     new_home = st.number_input("ค่าก่อสร้างบ้านใหม่ (สูงสุด 100,000)", 0.0, 100_000.0, 0.0, step=1000.0)
                 with g3b:
@@ -146,8 +197,8 @@ def render(tab_tax, tab_law, USER):
             with st.expander("💝 กลุ่ม 4 — เงินบริจาค"):
                 g4a, g4b = st.columns(2)
                 with g4a:
-                    donate_general = st.number_input("บริจาคทั่วไป (ไม่เกิน 10% ของเงินได้)", 0.0, 1_000_000.0, 0.0, step=500.0)
-                    donate_edu = st.number_input("บริจาคการศึกษา/กีฬา/รพ.รัฐ/สังคม (หัก 2 เท่า)", 0.0, 500_000.0, 0.0, step=500.0)
+                    donate_general = st.number_input("บริจาคทั่วไป (ไม่เกิน 10% ของเงินได้)", 0.0, 1_000_000.0, _pf("เงินบริจาค", 1_000_000.0), step=500.0)
+                    donate_edu = st.number_input("บริจาคการศึกษา/กีฬา/รพ.รัฐ/สังคม (หัก 2 เท่า)", 0.0, 500_000.0, _pf("เงินบริจาคการศึกษา-กีฬา", 500_000.0), step=500.0)
                 with g4b:
                     donate_party = st.number_input("บริจาคพรรคการเมือง (สูงสุด 10,000)", 0.0, 10_000.0, 0.0, step=500.0)
 
