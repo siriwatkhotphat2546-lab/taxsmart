@@ -94,7 +94,7 @@ def render(tab_consult, tab_pdpa, tab_partner, USER):
         if not my_txn.empty:
             csv_data = my_txn.to_csv(index=False).encode("utf-8-sig")
             st.download_button("⬇️ ดาวน์โหลดข้อมูลบัญชี (CSV)", csv_data,
-                              file_name=f"taxsmart_data_{USER}.csv", mime="text/csv")
+                              file_name=f"ngernthai_data_{USER}.csv", mime="text/csv")
         else:
             st.caption("ยังไม่มีข้อมูลให้ดาวน์โหลด")
 

@@ -326,7 +326,7 @@ with col_u:
 _utype = st.session_state.get("user_type", "ทั่วไป")
 _rec = {
     "บุคคลทั่วไป": "🧑 สำหรับคุณ: เริ่มที่ **📒 บันทึกบัญชี** → **🧮 คำนวณภาษี** เพื่อดูภาษีเงินเดือนของคุณ พร้อมลดหย่อน",
-    "ร้านค้า": "🏪 สำหรับร้านค้า: ลองใช้ **🏪 ร้านค้า/ร้านอาหาร** ที่เทียบวิธีหักค่าใช้จ่ายและคำนวณภาษีให้ครบ + **💲 คำนวณราคาขาย**",
+    "ร้านค้า": "🏪 สำหรับร้านค้า: ลองใช้ **🏪 ธุรกิจ** ที่เทียบวิธีหักค่าใช้จ่ายและคำนวณภาษีให้ครบ + **💲 ต้นทุน+ราคาขาย**",
     "ฟรีแลนซ์": "💼 สำหรับฟรีแลนซ์: เริ่มที่ **📒 บันทึกบัญชี** (เลือกเงินได้ ม.40(2)) → **🧮 คำนวณภาษี** และดู **✂️ หัก ณ ที่จ่าย**",
 }
 if _utype in _rec:
@@ -376,18 +376,42 @@ with st.sidebar:
 
 if st.session_state.get("is_admin") and IS_ADMIN_USER:
     admin.render(USER)
+    st.stop()
 
-tabD, tabMoney, tabTax, tabPrice, tabShop, tabAnalysis, tabPlan, tabLaw, tabMascot, tabPartner, tabConsult, tabService, tabUpgrade, tabPDPA = st.tabs([
-    "🏠 หน้าหลัก", "💰 รายรับ-รายจ่าย", "🧮 คำนวณภาษี", "💲 ต้นทุน+ราคาขาย", "🏪 ร้านค้า/ร้านอาหาร",
-    "📊 วิเคราะห์", "🔮 วางแผนการเงิน", "📖 คลังความรู้ภาษี",
-    "🐷 ยายนึก", "💞 ออมด้วยกัน", "🤝 ปรึกษาผู้เชี่ยวชาญ", "💼 บริการของเรา", "⭐ อัปเกรด", "🔒 ข้อมูล/PDPA"
+# ===== 8 แท็บหลัก (ยุบจาก 14 เดิม ให้ไม่รก ใช้แท็บย่อยข้างใน) =====
+tabHome, tabMoney, tabTax, tabPrice, tabMascot, tabBiz, tabService, tabSettings = st.tabs([
+    "🏠 หน้าหลัก", "💰 รายรับ-รายจ่าย", "🧮 ภาษี", "💲 ต้นทุน+ราคาขาย",
+    "👵 ยายนึก", "🏪 ธุรกิจ", "💼 บริการ+อัปเกรด", "⚙️ ตั้งค่า"
 ])
 
-home.render(tabD, tabAnalysis, tabPlan, USER)
+# 🏠 หน้าหลัก — รวม ภาพรวม + วิเคราะห์ + วางแผนการเงิน
+with tabHome:
+    sub_overview, sub_analysis, sub_plan = st.tabs(["📊 ภาพรวม", "📈 วิเคราะห์", "🔮 วางแผนการเงิน"])
+home.render(sub_overview, sub_analysis, sub_plan, USER)
+
+# 💰 รายรับ-รายจ่าย
 money.render(tabMoney, USER)
-tax_tab.render(tabTax, tabLaw, USER)
+
+# 🧮 ภาษี — รวม คำนวณภาษี + คลังความรู้ภาษี
+with tabTax:
+    sub_tax, sub_law = st.tabs(["🧮 คำนวณภาษี", "📖 คลังความรู้ภาษี"])
+tax_tab.render(sub_tax, sub_law, USER)
+
+# 💲 ต้นทุน+ราคาขาย
 pricing.render(tabPrice, USER)
-business.render(tabShop, USER)
+
+# 👵 ยายนึก
 yainuk.render(tabMascot, USER)
-settings.render(tabConsult, tabPDPA, tabPartner, USER)
-services.render(tabUpgrade, tabService, USER)
+
+# 🏪 ธุรกิจ (ร้านค้า/ร้านอาหาร)
+business.render(tabBiz, USER)
+
+# 💼 บริการ+อัปเกรด — รวมเป็นแท็บเดียว
+with tabService:
+    sub_service, sub_upgrade = st.tabs(["💼 บริการของเรา", "⭐ อัปเกรด"])
+services.render(sub_upgrade, sub_service, USER)
+
+# ⚙️ ตั้งค่า — รวม ปรึกษาผู้เชี่ยวชาญ + ออมด้วยกัน + ข้อมูล/PDPA
+with tabSettings:
+    sub_consult, sub_partner, sub_pdpa = st.tabs(["🤝 ปรึกษาผู้เชี่ยวชาญ", "💞 ออมด้วยกัน", "🔒 ข้อมูล/PDPA"])
+settings.render(sub_consult, sub_pdpa, sub_partner, USER)

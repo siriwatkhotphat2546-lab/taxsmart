@@ -1,3 +1,5 @@
+import os
+import base64
 import streamlit as st
 import pandas as pd
 from datetime import date
@@ -7,6 +9,32 @@ from core.db import get_conn, read_sql
 # =====================================================================
 #  ยายนึก (Mascot) — สะท้อนสุขภาพการเงิน
 # =====================================================================
+
+# โฟลเดอร์รูปยายนึก 4 อารมณ์
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
+
+# จับคู่สถานะอารมณ์ (จาก get_mascot_mood) → ไฟล์รูปใน assets/
+MOOD_IMAGE = {
+    "ยายภูมิใจ": "yainuk_proud.png",       # วันนี้บันทึกแล้ว
+    "ยายสดใส": "yainuk_happy.png",         # ห่างไม่เกิน 2 วัน
+    "ยายเป็นห่วง": "yainuk_worried.png",    # ห่าง 3-7 วัน
+    "ยายหิว-ยายคิดถึง": "yainuk_missing.png",  # ห่างเกิน 7 วัน
+    "ยายรอหลานอยู่": "yainuk_missing.png",  # ยังไม่เคยบันทึก
+}
+
+
+@st.cache_data
+def get_mascot_image_b64(mood_name):
+    """คืน base64 ของรูปยายนึกตามอารมณ์ — ถ้าไฟล์ไม่มีคืน None (ให้ fallback เป็น emoji)"""
+    fname = MOOD_IMAGE.get(mood_name, "yainuk_happy.png")
+    path = os.path.join(ASSETS_DIR, fname)
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    except Exception:
+        return None
+
+
 OUTFITS = {
     "ธรรมดา": {"emoji": "🐷", "cost": 0, "desc": "ยายนึกตัวจริง"},
     "ผ้าขาวม้า": {"emoji": "🐷🧣", "cost": 50, "desc": "ลุคไทยแท้"},

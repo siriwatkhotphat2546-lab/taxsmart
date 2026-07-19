@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import date, datetime
 
 from core.db import get_conn, read_sql
-from core.mascot import get_mascot_mood
+from core.mascot import get_mascot_mood, get_mascot_image_b64
 from core.tax import calc_progressive_tax, make_excel_report, make_pdf_report
 
 
@@ -11,20 +11,45 @@ def render(tab_home, tab_analysis, tab_plan, USER):
     with tab_home:
         st.subheader("🏠 ภาพรวมสุขภาพการเงินของคุณ")
 
-        # ===== สถานะยายนึกเล็กๆ ด้านบน (สรุปให้ไม่รก) =====
+        # ===== สถานะยายนึกเล็กๆ ด้านบน (รูปเล็ก ~80px ลอยเบาๆ + เรืองทอง) =====
         _mood_emo, _mood_name, _mood_msg, _days = get_mascot_mood(USER)
+        _b64 = get_mascot_image_b64(_mood_name)
+        if _b64:
+            _yn_visual = (f'<img class="yn-home-img" '
+                          f'src="data:image/png;base64,{_b64}" alt="ยายนึก"/>')
+        else:
+            _yn_visual = f'<div class="yn-home-emoji">👵{_mood_emo}</div>'
         st.markdown(f"""
-        <div style="display:flex;align-items:center;gap:14px;padding:12px 18px;border-radius:14px;
+        <style>
+        @keyframes yn-home-float {{0%,100%{{transform:translateY(0)}}50%{{transform:translateY(-6px)}}}}
+        @keyframes yn-home-glow {{
+          0%,100%{{box-shadow:0 0 10px rgba(240,180,41,0.35),0 0 20px rgba(240,180,41,0.15)}}
+          50%{{box-shadow:0 0 20px rgba(240,180,41,0.7),0 0 34px rgba(240,180,41,0.35)}}
+        }}
+        @keyframes yn-home-glow-txt {{
+          0%,100%{{filter:drop-shadow(0 0 8px rgba(240,180,41,0.4))}}
+          50%{{filter:drop-shadow(0 0 16px rgba(240,180,41,0.8))}}
+        }}
+        .yn-home-img{{
+          width:80px;height:80px;object-fit:contain;border-radius:50%;
+          animation:yn-home-float 3s ease-in-out infinite, yn-home-glow 2.5s ease-in-out infinite;
+        }}
+        .yn-home-emoji{{
+          font-size:46px;line-height:1;
+          animation:yn-home-float 3s ease-in-out infinite, yn-home-glow-txt 2.5s ease-in-out infinite;
+        }}
+        </style>
+        <div style="display:flex;align-items:center;gap:16px;padding:12px 18px;border-radius:14px;
         background:linear-gradient(135deg,rgba(127,119,221,0.12),rgba(29,158,117,0.10));
         border:1px solid rgba(127,119,221,0.25);margin-bottom:8px">
-        <div style="font-size:38px">{_mood_emo}</div>
+        {_yn_visual}
         <div>
         <div style="font-size:15px;font-weight:700;color:#E8E6F5">ยายนึก · {_mood_name}</div>
         <div style="font-size:13px;color:#A8A4C8">{_mood_msg}</div>
         </div>
         </div>
         """, unsafe_allow_html=True)
-        st.caption("👵 อยากดูยายนึกเต็มๆ + แต่งตัว ไปที่แท็บ 🐷 ยายนึก")
+        st.caption("👵 อยากดูยายนึกเต็มๆ + แต่งตัว ไปที่แท็บ 👵 ยายนึก")
 
         conn = get_conn()
         df_d = read_sql("SELECT * FROM transactions WHERE user_id=?", conn, params=(USER,))

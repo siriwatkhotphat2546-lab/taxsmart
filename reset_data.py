@@ -1,5 +1,5 @@
 """
-reset_data.py — ล้างข้อมูลเดิมทั้งหมดใน TaxSmart ให้เริ่มจากศูนย์
+reset_data.py — ล้างข้อมูลเดิมทั้งหมดใน เงินไทย ให้เริ่มจากศูนย์
 รันครั้งเดียว: python reset_data.py
 """
 import sqlite3

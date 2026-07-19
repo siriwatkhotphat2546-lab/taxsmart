@@ -1,9 +1,104 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from datetime import date, datetime
 
 from core.db import get_conn, read_sql
-from core.mascot import get_mascot, get_mascot_mood, OUTFITS
+from core.mascot import get_mascot, get_mascot_mood, get_mascot_image_b64, OUTFITS
+
+
+def _mascot_effect_html(b64, mood_emo, height=340):
+    """สร้าง HTML ยายนึก 2D พร้อมเอฟเฟกต์ CSS: ลอยขึ้นลง + แสงทองเรือง +
+    เอียงตามเมาส์ (JS) + เงาใต้ตัว — ถ้าไม่มีรูป fallback เป็น emoji 👵"""
+    if b64:
+        figure = (f'<img class="yn-img" '
+                  f'src="data:image/png;base64,{b64}" alt="ยายนึก"/>')
+    else:
+        # fallback — ไม่มีไฟล์รูป ใช้ emoji แทน (ห้าม error)
+        figure = f'<div class="yn-emoji">👵{mood_emo}</div>'
+
+    return f"""
+    <div class="yn-scene">
+      <div class="yn-wrap" id="ynWrap">
+        <div class="yn-float">
+          {figure}
+        </div>
+        <div class="yn-shadow"></div>
+      </div>
+    </div>
+    <style>
+      html,body {{ margin:0; padding:0; background:transparent; overflow:hidden; }}
+      .yn-scene {{
+        perspective: 800px;
+        display:flex; align-items:center; justify-content:center;
+        height:{height}px;
+      }}
+      .yn-wrap {{
+        transform-style: preserve-3d;
+        transition: transform .15s ease-out;
+        display:flex; flex-direction:column; align-items:center;
+      }}
+      .yn-float {{
+        animation: yn-float 3s ease-in-out infinite;
+      }}
+      .yn-img {{
+        width:200px; max-width:70vw; height:auto; display:block;
+        border-radius:20px;
+        animation: yn-glow 2.5s ease-in-out infinite;
+      }}
+      .yn-emoji {{
+        font-size:120px; line-height:1;
+        filter: drop-shadow(0 0 22px rgba(240,180,41,0.7));
+        animation: yn-glow-txt 2.5s ease-in-out infinite;
+      }}
+      .yn-shadow {{
+        width:150px; height:26px; margin-top:14px;
+        background: radial-gradient(ellipse at center,
+                    rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.0) 70%);
+        border-radius:50%;
+        filter: blur(4px);
+        animation: yn-shadow 3s ease-in-out infinite;
+      }}
+      @keyframes yn-float {{
+        0%,100% {{ transform: translateY(0); }}
+        50%     {{ transform: translateY(-8px); }}
+      }}
+      @keyframes yn-glow {{
+        0%,100% {{ box-shadow: 0 0 18px rgba(240,180,41,0.35),
+                               0 0 36px rgba(240,180,41,0.18); }}
+        50%     {{ box-shadow: 0 0 30px rgba(240,180,41,0.75),
+                               0 0 60px rgba(240,180,41,0.40),
+                               0 0 90px rgba(240,180,41,0.18); }}
+      }}
+      @keyframes yn-glow-txt {{
+        0%,100% {{ filter: drop-shadow(0 0 16px rgba(240,180,41,0.4)); }}
+        50%     {{ filter: drop-shadow(0 0 28px rgba(240,180,41,0.8)); }}
+      }}
+      @keyframes yn-shadow {{
+        0%,100% {{ transform: scaleX(1);   opacity:0.40; }}
+        50%     {{ transform: scaleX(0.78); opacity:0.22; }}
+      }}
+    </style>
+    <script>
+      (function() {{
+        var wrap = document.getElementById('ynWrap');
+        if (!wrap) return;
+        document.addEventListener('mousemove', function(e) {{
+          var r = wrap.getBoundingClientRect();
+          var cx = r.left + r.width / 2;
+          var cy = r.top + r.height / 2;
+          var dx = (e.clientX - cx) / (r.width  || 1);
+          var dy = (e.clientY - cy) / (r.height || 1);
+          var rotY = Math.max(-16, Math.min(16, dx * 22));
+          var rotX = Math.max(-16, Math.min(16, -dy * 22));
+          wrap.style.transform = 'rotateX(' + rotX + 'deg) rotateY(' + rotY + 'deg)';
+        }});
+        document.addEventListener('mouseleave', function() {{
+          wrap.style.transform = 'rotateX(0deg) rotateY(0deg)';
+        }});
+      }})();
+    </script>
+    """
 
 
 def render(tab, USER):
@@ -16,22 +111,17 @@ def render(tab, USER):
         coins = int(m["coins"]) if m is not None else 0
         streak = int(m["streak"]) if m is not None else 0
 
-        # URL รูปยายนึก 3D (ผู้ใช้อัปขึ้น GitHub ชื่อ yai_nuk.png)
-        YAINUK_IMG = "https://raw.githubusercontent.com/siriwatkhotphat2546-lab/taxsmart/main/yai_nuk.png"
+        # เลือกรูปยายนึกตามอารมณ์ (base64 embed จากไฟล์ใน assets/)
+        yn_b64 = get_mascot_image_b64(mood_name)
 
-        # ---------- แสดงยายนึก ----------
+        # ---------- แสดงยายนึก 2D + เอฟเฟกต์ ----------
         mc1, mc2 = st.columns([1, 2])
         with mc1:
+            components.html(_mascot_effect_html(yn_b64, mood_emo), height=350)
             st.markdown(f"""
-            <div style="text-align:center;padding:16px;border-radius:20px;
-            background:linear-gradient(135deg,rgba(127,119,221,0.15),rgba(29,158,117,0.12));
-            border:1px solid rgba(127,119,221,0.3)">
-            <img src="{YAINUK_IMG}" style="width:100%;max-width:200px;border-radius:16px;
-            box-shadow:0 8px 24px rgba(0,0,0,0.3)"
-            onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
-            <div style="display:none;font-size:80px">👵{mood_emo}</div>
-            <div style="font-size:20px;font-weight:700;margin-top:12px">{mood_emo} {mood_name}</div>
-            <div style="font-size:12px;color:#A8A4C8;margin-top:4px">ชุด: {outfit}</div>
+            <div style="text-align:center;margin-top:-8px">
+            <div style="font-size:20px;font-weight:700">{mood_emo} {mood_name}</div>
+            <div style="font-size:12px;color:#A8A4C8;margin-top:2px">ชุด: {outfit}</div>
             </div>
             """, unsafe_allow_html=True)
 
